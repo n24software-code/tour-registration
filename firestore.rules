@@ -1,0 +1,55 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function adminDoc() { return get(/databases/$(database)/documents/admins/$(request.auth.uid)); }
+    function isAdmin() { return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)); }
+    function hasRole(roles) { return isAdmin() && adminDoc().data.role in roles; }
+    function changedKeys() { return request.resource.data.diff(resource.data).affectedKeys(); }
+
+    // Tours: public read (for the form). PO/PM manage them.
+    // Registration team may only adjust the seat counter (when cancelling).
+    match /tours/{tourId} {
+      allow read: if true;
+      allow create, delete: if hasRole(['po', 'pm']);
+      allow update: if hasRole(['po', 'pm'])
+        || (hasRole(['registration']) && changedKeys().hasOnly(['registeredCount']));
+    }
+
+    // Registrations: created ONLY by the server (/api/register, Admin SDK) so capacity
+    // and duplicates are enforced in a transaction.
+    match /registrations/{regId} {
+      allow read: if isAdmin();
+      allow create: if false;
+      allow update: if hasRole(['po', 'pm', 'registration'])
+        || (hasRole(['crowd'])
+            && resource.data.status in ['confirmed', 'checked_in', 'boarded', 'no_show']
+            && request.resource.data.status in ['confirmed', 'checked_in', 'boarded', 'no_show']
+            && changedKeys().hasOnly(['status', 'busNumber', 'checkedInAt', 'boardedAt',
+                                      'flag', 'updatedAt', 'updatedBy']));
+      allow delete: if hasRole(['po']);
+    }
+
+    // Team accounts and roles: only the PO manages the team.
+    // A signed-in user may always read their own doc (so the app can tell them they have no role).
+    match /admins/{uid} {
+      allow read: if isAdmin() || (signedIn() && request.auth.uid == uid);
+      allow write: if hasRole(['po']);
+    }
+
+    // Audit trail: every admin writes their own entries, PO/PM read. Never edited or deleted.
+    match /auditLogs/{logId} {
+      allow read: if hasRole(['po', 'pm']);
+      allow create: if isAdmin()
+        && request.resource.data.byUid == request.auth.uid
+        && request.resource.data.byRole == adminDoc().data.role;
+      allow update, delete: if false;
+    }
+
+    // Confirmation emails (Trigger Email extension) are server-written only.
+    match /mail/{id} {
+      allow read, write: if false;
+    }
+  }
+}
