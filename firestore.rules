@@ -17,8 +17,9 @@ service cloud.firestore {
         || (hasRole(['registration']) && changedKeys().hasOnly(['registeredCount']));
     }
 
-    // Registrations: created ONLY by the server (/api/register, Admin SDK) so capacity
-    // and duplicates are enforced in a transaction.
+    // Registrations: created ONLY by the server (/api/register, Admin SDK) so capacity,
+    // the nationality restriction and duplicate passports are enforced in a transaction.
+    // Delete is the Product Owner's alone (lib/roles.ts `deleteRegistrations`).
     match /registrations/{regId} {
       allow read: if isAdmin();
       allow create: if false;

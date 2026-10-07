@@ -15,6 +15,8 @@ const PERMISSIONS = {
   operatePickup: ['po', 'pm', 'crowd'],
   manageTours: ['po', 'pm'],
   manageTeam: ['po'],
+  // Deleting a registration erases the record for good, so it is the PO's call alone.
+  deleteRegistrations: ['po'],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type Permission = keyof typeof PERMISSIONS;

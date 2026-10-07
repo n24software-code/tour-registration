@@ -25,21 +25,27 @@ initializeApp({
 const db = getFirestore();
 const auth = getAuth();
 
+// SABIC cannot host these nationalities, so the tour document carries the rule and
+// /api/register enforces it. Every other tour is open to everyone.
+const SABIC_RESTRICTED = ['IQ', 'YE', 'LB', 'SY'];
+
 const TOURS = [
   { id: 'kapsarc-black-gold', name: 'KAPSARC & Black Gold Museum', slot: 'morning', departureTime: '08:00' },
-  { id: 'sabic-home-of-innovation', name: 'SABIC - Home of Innovation', slot: 'morning', departureTime: '08:30' },
+  { id: 'sabic-home-of-innovation', name: 'SABIC - Home of Innovation', slot: 'morning', departureTime: '08:30',
+    restrictedNationalities: SABIC_RESTRICTED },
   { id: 'aramco-kafd', name: 'Saudi Aramco - KAFD', slot: 'morning', departureTime: '09:00' },
   { id: 'diriyah-heritage-trail', name: 'Heritage Trail - Diriyah', slot: 'evening', departureTime: '16:30' },
   { id: 'downtown-national-history', name: 'Downtown & National History', slot: 'evening', departureTime: '17:00' },
 ];
 
 for (const [i, t] of TOURS.entries()) {
-  const { id, ...data } = t;
+  const { id, restrictedNationalities = [], ...data } = t;
   const ref = db.collection('tours').doc(id);
   if ((await ref.get()).exists) { console.log(`skip   ${t.name} (already exists)`); continue; }
   await ref.set({
     ...data, pickupPoint: 'Main pickup area', date: '',
     capacity: 50, registeredCount: 0, active: true, order: i + 1,
+    restrictedNationalities,
   });
   console.log(`added  ${t.name}`);
 }

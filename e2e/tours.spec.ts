@@ -25,8 +25,8 @@ test.describe('Tours (PM)', () => {
   });
 
   test('capacity below registeredCount is blocked', async ({ page }) => {
-    // Make sure at least one seat is taken.
-    await registerVisitor(page, { name: 'Capacity Guard', email: testEmail(), tourId: TOUR });
+    // Make sure at least one seat is taken. SABIC blocks four nationalities, so register a Saudi.
+    await registerVisitor(page, { name: 'Capacity Guard', email: testEmail(), tourId: TOUR, nationality: 'Saudi' });
     const tour = await getTour(TOUR);
     expect(tour.registeredCount).toBeGreaterThan(0);
 
@@ -78,6 +78,7 @@ test.describe('Tours (PM)', () => {
     await page.locator('#new-pickup').fill('Gate 9');
     await page.locator('#new-time').fill('19:30');
     await page.locator('#new-cap').fill('25');
+    await page.locator('#new-restricted').selectOption(['IQ']);
     await page.getByRole('button', { name: 'Add tour' }).click();
 
     await expect(page.getByLabel(`Pickup point for ${name}`)).toBeVisible({ timeout: 20_000 });
@@ -87,7 +88,7 @@ test.describe('Tours (PM)', () => {
     expect(added).toBeTruthy();
     expect(added!.data()).toMatchObject({
       name, slot: 'evening', pickupPoint: 'Gate 9', departureTime: '19:30',
-      capacity: 25, registeredCount: 0, active: true,
+      capacity: 25, registeredCount: 0, active: true, restrictedNationalities: ['IQ'],
     });
 
     // It is immediately offered to the public.

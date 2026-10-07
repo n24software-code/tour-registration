@@ -1,9 +1,19 @@
 import { expect, test, type Browser, type Page } from '@playwright/test';
+import { Workbook } from 'exceljs';
 import {
-  CREDS, TOUR_IDS, getReg, getTour, registerVisitor, signIn, testEmail, waitForAudit, auditFor,
+  CREDS, TOUR_IDS, dayAfter, getReg, getTour, patchTour, registerVisitor, signIn,
+  testEmail, testPassport, waitForAudit, auditFor,
 } from './helpers';
 
 const TOUR = TOUR_IDS.kapsarc;
+/** Everything in this file rides on one trip, so Crowd can pick it from the list. */
+const DATE = dayAfter(1);
+let TRIP = '';
+
+test.beforeAll(async () => {
+  await patchTour(TOUR, { date: '' });
+  TRIP = `${TOUR}|${DATE}|${(await getTour(TOUR)).departureTime}`;
+});
 
 /** Opens an isolated context so Registration and Crowd are two real browsers. */
 async function asRole(browser: Browser, role: 'registration' | 'crowd', url: string) {
@@ -18,14 +28,14 @@ const crowdCard = (page: Page, code: string) => page.locator('li', { hasText: co
 const regRow = (page: Page, code: string) => page.locator('tr', { hasText: code });
 
 async function selectCrowdTour(page: Page) {
-  await page.getByLabel('Tour').selectOption(TOUR);
+  await page.getByLabel('Trip').selectOption(TRIP);
   await expect(page.getByLabel('Find a visitor')).toBeVisible();
 }
 
 test.describe('Registration <-> Crowd in real time', () => {
   test('pending is hidden from Crowd but counted; Confirm pushes the visitor across live', async ({ browser, page }) => {
     const email = testEmail();
-    const code = await registerVisitor(page, { name: 'Live Handover', email, tourId: TOUR });
+    const code = await registerVisitor(page, { name: 'Live Handover', email, tourId: TOUR, date: DATE });
 
     const crowd = await asRole(browser, 'crowd', '/admin/crowd');
     await selectCrowdTour(crowd.page);
@@ -51,7 +61,7 @@ test.describe('Registration <-> Crowd in real time', () => {
 
   test('Check in, Board bus gated on a bus number, then On the bus + Bus 3', async ({ browser, page }) => {
     const email = testEmail();
-    const code = await registerVisitor(page, { name: 'Boarding Flow', email, tourId: TOUR });
+    const code = await registerVisitor(page, { name: 'Boarding Flow', email, tourId: TOUR, date: DATE });
 
     const reg = await asRole(browser, 'registration', '/admin/registrations');
     await regRow(reg.page, code).getByRole('button', { name: 'Confirm' }).click();
@@ -92,7 +102,7 @@ test.describe('Registration <-> Crowd in real time', () => {
 
   test('No-show, and Undo from both At pickup and No-show', async ({ browser, page }) => {
     const email = testEmail();
-    const code = await registerVisitor(page, { name: 'Undo Paths', email, tourId: TOUR });
+    const code = await registerVisitor(page, { name: 'Undo Paths', email, tourId: TOUR, date: DATE });
 
     const reg = await asRole(browser, 'registration', '/admin/registrations');
     await regRow(reg.page, code).getByRole('button', { name: 'Confirm' }).click();
@@ -131,8 +141,8 @@ test.describe('Registration <-> Crowd in real time', () => {
 
   test('Flag issue surfaces live at the top of the Registration list; filter and Mark resolved clear it', async ({ browser, page }) => {
     // A second, unflagged visitor so we can prove the flagged one sorts first.
-    const otherCode = await registerVisitor(page, { name: 'Aaa Unflagged', email: testEmail(), tourId: TOUR });
-    const code = await registerVisitor(page, { name: 'Zzz Flagged', email: testEmail(), tourId: TOUR });
+    const otherCode = await registerVisitor(page, { name: 'Aaa Unflagged', email: testEmail(), tourId: TOUR, date: DATE });
+    const code = await registerVisitor(page, { name: 'Zzz Flagged', email: testEmail(), tourId: TOUR, date: DATE });
 
     const reg = await asRole(browser, 'registration', '/admin/registrations');
     await regRow(reg.page, otherCode).getByRole('button', { name: 'Confirm' }).click();
@@ -154,7 +164,9 @@ test.describe('Registration <-> Crowd in real time', () => {
     const flaggedRow = regRow(reg.page, code);
     await expect(flaggedRow).toContainText(`Crowd team: ${MESSAGE}`, { timeout: 20_000 });
     await expect(reg.page.getByText(/1 flagged|\d+ flagged/)).toBeVisible();
-    const firstRowText = await reg.page.locator('tbody tr').first().innerText();
+    const mySection = reg.page.locator('section').filter({ hasText: (await getTour(TOUR)).name })
+      .filter({ has: reg.page.locator('tr', { hasText: code }) });
+    const firstRowText = await mySection.locator('tbody tr').first().innerText();
     expect(firstRowText).toContain(code);
 
     // The "Flagged by Crowd team" filter narrows to it.
@@ -177,7 +189,7 @@ test.describe('Registration <-> Crowd in real time', () => {
 
   test('Cancel releases the seat and removes the visitor from Crowd', async ({ browser, page }) => {
     const email = testEmail();
-    const code = await registerVisitor(page, { name: 'Cancel Me', email, tourId: TOUR });
+    const code = await registerVisitor(page, { name: 'Cancel Me', email, tourId: TOUR, date: DATE });
 
     const reg = await asRole(browser, 'registration', '/admin/registrations');
     await regRow(reg.page, code).getByRole('button', { name: 'Confirm' }).click();
@@ -205,29 +217,32 @@ test.describe('Registration <-> Crowd in real time', () => {
   });
 
   test('Overview counts follow each step', async ({ browser, page }) => {
-    const code = await registerVisitor(page, { name: 'Counted Visitor', email: testEmail(), tourId: TOUR });
+    const code = await registerVisitor(page, { name: 'Counted Visitor', email: testEmail(), tourId: TOUR, date: DATE });
 
     const po = await asRole(browser, 'registration', '/admin');
-    const row = po.page.locator('tr', { hasText: (await getTour(TOUR)).name });
-    const cell = (i: number) => row.locator('td').nth(i); // 0 tour, 1 registered, 2 pending, 3 confirmed, 4 at pickup, 5 on bus, 6 no-show
+    // One row per trip now, so target this trip's row rather than the whole tour.
+    const row = po.page.locator(`tr[data-trip="${TRIP}"]`);
+    // 0 trip, 1 registered, 2 seats left, 3 pending, 4 confirmed, 5 at pickup, 6 on bus, 7 no-show
+    const cell = (i: number) => row.locator('td').nth(i);
+    const PENDING = 3, CONFIRMED = 4, AT_PICKUP = 5;
 
-    const pendingBefore = Number(await cell(2).innerText());
+    const pendingBefore = Number(await cell(PENDING).innerText());
 
     const reg = await asRole(browser, 'registration', '/admin/registrations');
     await regRow(reg.page, code).getByRole('button', { name: 'Confirm' }).click();
 
     // Pending drops by one, Confirmed rises by one - live.
-    await expect.poll(async () => Number(await cell(2).innerText()), { timeout: 20_000 })
+    await expect.poll(async () => Number(await cell(PENDING).innerText()), { timeout: 20_000 })
       .toBe(pendingBefore - 1);
 
-    const confirmedNow = Number(await cell(3).innerText());
+    const confirmedNow = Number(await cell(CONFIRMED).innerText());
     const crowd = await asRole(browser, 'crowd', '/admin/crowd');
     await selectCrowdTour(crowd.page);
     await crowdCard(crowd.page, code).getByRole('button', { name: 'Check in' }).click();
 
-    await expect.poll(async () => Number(await cell(3).innerText()), { timeout: 20_000 })
+    await expect.poll(async () => Number(await cell(CONFIRMED).innerText()), { timeout: 20_000 })
       .toBe(confirmedNow - 1);
-    await expect.poll(async () => Number(await cell(4).innerText()), { timeout: 20_000 })
+    await expect.poll(async () => Number(await cell(AT_PICKUP).innerText()), { timeout: 20_000 })
       .toBeGreaterThanOrEqual(1);
 
     await po.ctx.close();
@@ -235,42 +250,50 @@ test.describe('Registration <-> Crowd in real time', () => {
     await crowd.ctx.close();
   });
 
-  test('Export CSV downloads the filtered rows with the documented header', async ({ browser, page }) => {
-    const email = testEmail();
-    const code = await registerVisitor(page, { name: 'Csv Visitor', email, tourId: TOUR });
+  test('Export all honours the search filter, and the section file names its trip', async ({ browser, page }) => {
+    const passport = testPassport();
+    const code = await registerVisitor(page, {
+      name: 'Export Filtered', email: testEmail(), tourId: TOUR, passport,
+      nationality: 'Egyptian', date: DATE,
+    });
 
     const reg = await asRole(browser, 'registration', '/admin/registrations');
 
     // Filter down to this one visitor so we can assert "only the filtered rows".
-    await reg.page.getByPlaceholder('Search code, name, email or phone').fill(code);
+    await reg.page.getByPlaceholder('Search code, name, email, phone or passport').fill(code);
     await expect(regRow(reg.page, code)).toBeVisible();
-    await expect(reg.page.getByRole('button', { name: 'Export CSV (1)' })).toBeVisible();
+    await expect(reg.page.getByRole('button', { name: 'Export all (Excel) (1)' })).toBeVisible();
+    await expect(reg.page.locator('section')).toHaveCount(1);
 
-    const [download] = await Promise.all([
+    const [all] = await Promise.all([
       reg.page.waitForEvent('download'),
-      reg.page.getByRole('button', { name: /Export CSV/ }).click(),
+      reg.page.getByRole('button', { name: /Export all \(Excel\)/ }).click(),
     ]);
-    expect(download.suggestedFilename()).toMatch(/^registrations-\d{4}-\d{2}-\d{2}\.csv$/);
+    expect(all.suggestedFilename()).toMatch(/^all-registrations_\d{4}-\d{2}-\d{2}_\d{4}\.xlsx$/);
 
-    const body = (await (await import('node:fs/promises')).readFile(await download.path(), 'utf8'))
-      .replace(/^﻿/, '');
-    const lines = body.split('\r\n').filter(Boolean);
+    // One matching row means one trip, so no Summary sheet and exactly one data row.
+    const wb = new Workbook();
+    await wb.xlsx.readFile((await all.path())!);
+    expect(wb.worksheets).toHaveLength(1);
+    const ws = wb.worksheets[0];
+    const values = (ws.getRow(3).values as unknown[]).slice(1);
+    expect(ws.rowCount).toBe(3); // title + header + the one row
+    expect(values[0]).toBe(code);
+    expect(values[3]).toBe(passport);
+    expect(values[4]).toBe('Egyptian');
 
-    // Header, quoted per RFC 4180.
-    const header = lines[0].split(',').map((c) => c.replace(/^"|"$/g, ''));
-    expect(header).toEqual(['Code', 'Name', 'Email', 'Phone', 'Tour', 'Status', 'Bus', 'Registered at']);
-
-    // Exactly the one filtered row.
-    expect(lines).toHaveLength(2);
-    expect(lines[1]).toContain(code);
-    expect(lines[1]).toContain(email);
-    expect(lines[1]).toContain('Csv Visitor');
+    // The section's own button names the trip it came from.
+    const [sectionFile] = await Promise.all([
+      reg.page.waitForEvent('download'),
+      reg.page.locator('section').getByRole('button', { name: /Save \/ Export/ }).first().click(),
+    ]);
+    expect(sectionFile.suggestedFilename()).toContain(DATE);
 
     await reg.ctx.close();
   });
 
   test('every audit entry carries the acting uid and role', async ({ browser, page }) => {
-    const code = await registerVisitor(page, { name: 'Audit Subject', email: testEmail(), tourId: TOUR });
+    const code = await registerVisitor(page, { name: 'Audit Subject', email: testEmail(), tourId: TOUR, date: DATE });
 
     const reg = await asRole(browser, 'registration', '/admin/registrations');
     await regRow(reg.page, code).getByRole('button', { name: 'Confirm' }).click();

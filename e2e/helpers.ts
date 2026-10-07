@@ -19,6 +19,30 @@ export const testEmail = () =>
 export const isTestEmail = (e: string) =>
   e.startsWith(TEST_EMAIL_PREFIX) && e.endsWith(TEST_EMAIL_DOMAIN);
 
+/**
+ * Email is optional now, so teardown can no longer rely on it alone. Every passport the
+ * suite invents starts with E2E, which real passports never do.
+ */
+export const TEST_PASSPORT_PREFIX = 'E2E';
+export const testPassport = () =>
+  `${TEST_PASSPORT_PREFIX}${String(Date.now()).slice(-8)}${randomInt(100, 999)}`;
+export const isTestPassport = (p: string) => p.startsWith(TEST_PASSPORT_PREFIX);
+/** True for anything this suite created, however it was created. */
+export const isTestReg = (d: { email?: unknown; passportNumber?: unknown }) =>
+  isTestEmail(String(d.email ?? '')) || isTestPassport(String(d.passportNumber ?? ''));
+
+/** "YYYY-MM-DD" in Riyadh, the same clock lib/validation.ts uses. */
+export const today = () => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Riyadh', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(new Date());
+
+/** A date `days` after today, as "YYYY-MM-DD". */
+export function dayAfter(days: number) {
+  const d = new Date(`${today()}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 // ---------------------------------------------------------------- Admin SDK
 
 let app: App | undefined;
@@ -103,21 +127,104 @@ export async function signOut(page: Page) {
   await expect(page).toHaveURL(/\/login/);
 }
 
+export interface VisitorOpts {
+  name: string;
+  tourId: string;
+  /** Optional now — leave it out to prove the field really is optional. */
+  email?: string;
+  phone?: string;
+  passport?: string;
+  /** Demonym, not the code, because that is what the combobox shows. */
+  nationality?: string;
+  /** Ignored when the tour has a fixed date — the form fills that in itself. */
+  date?: string;
+}
+
+// ---------------------------------------------------------------- logos
+
+/** Left to right, exactly as the partners agreed. */
+export const LOGO_ALTS = [
+  'Ministry of Energy',
+  '25th WPC Energy Congress, 11–15 October 2026',
+  'WPC Energy',
+] as const;
+
+/** Checks all three logos are present, in order, the same height, and on screen. */
+export async function expectLogos(page: Page, scope = page.locator('body')) {
+  const boxes: { h: number; x: number; right: number }[] = [];
+  for (const alt of LOGO_ALTS) {
+    const img = scope.getByAltText(alt, { exact: true });
+    await expect(img, `logo "${alt}" is missing`).toBeVisible();
+    const b = (await img.boundingBox())!;
+    expect(b.width, `logo "${alt}" has no width`).toBeGreaterThan(0);
+    boxes.push({ h: b.height, x: b.x, right: b.x + b.width });
+  }
+  // Same visible height, within a rounding pixel or two.
+  const heights = boxes.map((b) => b.h);
+  expect(Math.max(...heights) - Math.min(...heights),
+    `logo heights differ: ${heights.join(', ')}`).toBeLessThanOrEqual(2);
+  // Left to right in the agreed order, with no overlap.
+  for (let i = 1; i < boxes.length; i++) {
+    expect(boxes[i].x, `logo ${i + 1} is not to the right of logo ${i}`)
+      .toBeGreaterThanOrEqual(boxes[i - 1].right - 1);
+  }
+  return boxes;
+}
+
+export async function noSidewaysScroll(page: Page) {
+  const { scrollW, clientW } = await page.evaluate(() => ({
+    scrollW: document.documentElement.scrollWidth,
+    clientW: document.documentElement.clientWidth,
+  }));
+  expect(scrollW, 'page scrolls sideways').toBeLessThanOrEqual(clientW);
+}
+
+/** The nationality combobox. Addressed by role so the popup listbox can't be confused for it. */
+export const nationalityBox = (page: Page) => page.getByRole('combobox', { name: 'Nationality' });
+
+/** Picks a nationality through the combobox, exactly as a visitor would. */
+export async function chooseNationality(page: Page, label: string) {
+  const input = nationalityBox(page);
+  await input.click();
+  await input.fill(label);
+  await page.getByRole('option', { name: label, exact: true }).first().click();
+  await expect(input).toHaveValue(label);
+}
+
 /** Registers a visitor through the public form and returns the 6-char code. */
-export async function registerVisitor(
-  page: Page, opts: { name: string; email: string; phone?: string; tourId: string }
-) {
+export async function registerVisitor(page: Page, opts: VisitorOpts) {
+  await fillRegistrationForm(page, opts);
+  await page.getByRole('button', { name: /Register for this tour/ }).click();
+  await expect(page).toHaveURL(/\/registered\/[A-Z2-9]{6}/, { timeout: 30_000 });
+  return page.url().split('/').pop()!.toUpperCase();
+}
+
+/** Everything registerVisitor does except pressing Register — for validation tests. */
+export async function fillRegistrationForm(page: Page, opts: VisitorOpts) {
   await page.goto('/');
+  await page.getByLabel('Full name').fill(opts.name);
+  await page.getByLabel('Mobile number').fill(opts.phone ?? '0501234567');
+  await page.getByLabel('Passport number').fill(opts.passport ?? testPassport());
+  await chooseNationality(page, opts.nationality ?? 'Saudi');
+
   // The radio itself is .sr-only, so click the label that wraps it, as a user would.
   const radio = page.locator(`input[name="tour"][value="${opts.tourId}"]`);
   await page.locator('label', { has: radio }).click();
   await expect(radio).toBeChecked();
-  await page.getByLabel('Full name').fill(opts.name);
-  await page.getByLabel('Email').fill(opts.email);
-  await page.getByLabel('Phone number').fill(opts.phone ?? '0501234567');
-  await page.getByRole('button', { name: /Register for this tour/ }).click();
-  await expect(page).toHaveURL(/\/registered\/[A-Z2-9]{6}/, { timeout: 30_000 });
-  return page.url().split('/').pop()!.toUpperCase();
+
+  const date = page.getByLabel('Date', { exact: true });
+  if (!(await date.evaluate((el: HTMLInputElement) => el.readOnly))) {
+    await date.fill(opts.date ?? dayAfter(1));
+  }
+  if (opts.email) await page.getByLabel(/^Email/).fill(opts.email);
+}
+
+/** The JSON body /api/register expects, with sensible defaults. */
+export function registrationBody(over: Partial<Record<string, string>> = {}) {
+  return {
+    name: 'Api Visitor', phone: '0501234567', passportNumber: testPassport(),
+    nationality: 'SA', tourId: TOUR_IDS.aramco, tourDate: dayAfter(1), ...over,
+  };
 }
 
 // ---------------------------------------------------------------- data helpers
@@ -135,6 +242,7 @@ export async function getTour(tourId: string) {
   return snap.data() as {
     name: string; slot: string; pickupPoint: string; departureTime: string;
     date?: string; capacity: number; registeredCount: number; active: boolean; order: number;
+    restrictedNationalities?: string[];
   };
 }
 
@@ -149,7 +257,11 @@ export async function fillTour(tourId: string) {
 
 export const getReg = async (code: string) =>
   (await adminDb().collection('registrations').doc(code).get()).data() as
-    | { status: string; busNumber?: string | null; flag?: string | null; email: string; name: string }
+    | {
+        status: string; busNumber?: string | null; flag?: string | null;
+        email?: string | null; name: string; phone: string;
+        passportNumber?: string; nationality?: string; tourDate?: string; departureTime?: string;
+      }
     | undefined;
 
 /** Audit entries for one registration, newest first. */

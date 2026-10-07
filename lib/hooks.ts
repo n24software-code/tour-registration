@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
 import {
-  collection, onSnapshot, orderBy, query, where,
+  collection, onSnapshot, orderBy, query,
   type DocumentData, type QueryConstraint, type QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import { db } from './firebase';
@@ -36,9 +36,6 @@ export function useTours() {
 
 export const useRegistrations = () =>
   useLive<Registration>('registrations', [orderBy('createdAt', 'desc')], 'all', withId<Registration>);
-
-export const useTourRegistrations = (tourId: string) =>
-  useLive<Registration>('registrations', [where('tourId', '==', tourId)], tourId, withId<Registration>, !!tourId);
 
 export const useAdmins = () =>
   useLive<Admin>('admins', [], 'all', (d) => ({ ...d.data(), uid: d.id }) as Admin);

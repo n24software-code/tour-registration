@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { CREDS, adminDocFor, type Role, signIn } from './helpers';
+import { CREDS, LOGO_ALTS, adminDocFor, type Role, signIn } from './helpers';
 
 // Mirrors lib/roles.ts exactly. If these drift, the app and the matrix disagree.
 const NAV_FOR: Record<Role, string[]> = {
@@ -57,6 +57,8 @@ test.describe('Auth and roles', () => {
       await expect(page.getByText(name, { exact: true })).toBeVisible();
       await expect(page.getByText(ROLE_LABEL[role], { exact: false })).toBeVisible();
       await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+      // The partner logos sit in the admin header too, at the smaller size.
+      await expect(page.locator('header').getByAltText(LOGO_ALTS[0], { exact: true })).toBeVisible();
 
       // Nav is exactly the permitted set, in order.
       await expect(navLinks(page)).toHaveText(NAV_FOR[role]);

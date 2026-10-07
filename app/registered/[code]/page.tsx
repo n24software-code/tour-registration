@@ -3,6 +3,7 @@ import Link from 'next/link';
 import type { Metadata } from 'next';
 import { adminDb } from '@/lib/firebase-admin';
 import { SlotMark, formatDate } from '@/components/ui';
+import { LogoBand } from '@/components/Logos';
 import type { Slot } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -19,35 +20,45 @@ export default async function RegisteredPage({ params }: { params: { code: strin
   const tour = (await db.collection('tours').doc(reg.tourId).get()).data();
   const firstName = String(reg.name).split(' ')[0]; // public URL: show the first name only
   const slot = reg.slot as Slot;
+  // This page is reachable by anyone with the code, so it never shows the passport number.
+  const date: string = reg.tourDate || tour?.date || '';
+  const departureTime: string = reg.departureTime || tour?.departureTime || '';
 
   return (
-    <main className="mx-auto max-w-xl px-4 py-12 sm:px-5 sm:py-16">
-      <p className="flex items-center gap-2 text-ink/75">
-        <SlotMark slot={slot} /> You&rsquo;re registered, {firstName}.
-      </p>
-      <h1 className="mt-3 text-3xl font-semibold">{reg.tourName}</h1>
-
-      <div className="mt-8 rounded-md border-2 border-dashed border-ink/30 bg-white p-6 text-center">
-        <p className="text-sm text-ink/70">Your code — show it at the pickup area</p>
-        <p className="mt-2 font-mono text-5xl font-semibold tracking-[0.2em] sm:text-6xl" aria-label={`Code ${code.split('').join(' ')}`}>
-          {code}
+    <>
+      <LogoBand />
+      <main className="mx-auto max-w-xl px-4 py-12 sm:px-5 sm:py-16">
+        <p className="flex items-center gap-2 text-ink/75">
+          <SlotMark slot={slot} /> You&rsquo;re registered, {firstName}.
         </p>
-      </div>
+        <h1 className="mt-3 text-3xl font-semibold">{reg.tourName}</h1>
 
-      {tour && (
+        <div className="mt-8 rounded-md border-2 border-dashed border-ink/30 bg-white p-6 text-center">
+          <p className="text-sm text-ink/70">Your code — show it at the pickup area</p>
+          <p className="mt-2 font-mono text-5xl font-semibold tracking-[0.2em] sm:text-6xl" aria-label={`Code ${code.split('').join(' ')}`}>
+            {code}
+          </p>
+        </div>
+
         <dl className="mt-8 grid grid-cols-[auto,1fr] gap-x-6 gap-y-3 text-[15px]">
-          <dt className="text-ink/70">Pickup point</dt><dd className="font-medium">{tour.pickupPoint}</dd>
-          <dt className="text-ink/70">Bus leaves</dt>
-          <dd className="font-medium">{tour.departureTime}{tour.date ? `, ${formatDate(tour.date)}` : ''}</dd>
+          <dt className="text-ink/70">Date</dt>
+          <dd className="font-medium">{date ? formatDate(date) : 'To be confirmed'}</dd>
+          {tour && <>
+            <dt className="text-ink/70">Pickup point</dt><dd className="font-medium">{tour.pickupPoint}</dd>
+          </>}
+          {departureTime && <>
+            <dt className="text-ink/70">Bus leaves</dt><dd className="font-medium">{departureTime}</dd>
+          </>}
         </dl>
-      )}
-      <p className={`mt-6 rounded-md px-4 py-3 font-medium ${slot === 'morning' ? 'bg-sun/20' : 'bg-dusk/10'}`}>
-        Arrive 15 minutes before departure.
-      </p>
-      <p className="mt-6 text-sm text-ink/70">
-        Take a screenshot of this page. Our registration team will review your registration and may contact you to confirm your seat.
-      </p>
-      <Link href="/" className="mt-8 inline-block text-sm underline">Register someone else</Link>
-    </main>
+
+        <p className={`mt-6 rounded-md px-4 py-3 font-medium ${slot === 'morning' ? 'bg-sun/20' : 'bg-dusk/10'}`}>
+          Arrive 15 minutes before departure.
+        </p>
+        <p className="mt-6 text-sm text-ink/70">
+          Take a screenshot of this page. Our registration team will review your registration and may contact you to confirm your seat.
+        </p>
+        <Link href="/" className="mt-8 inline-block text-sm underline">Register someone else</Link>
+      </main>
+    </>
   );
 }

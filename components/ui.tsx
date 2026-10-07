@@ -44,6 +44,17 @@ export function ErrorNote({ message, onClose }: { message: string; onClose?: () 
   );
 }
 
+/** The quiet counterpart to ErrorNote: announced politely, dismissible. */
+export function SuccessNote({ message, onClose }: { message: string; onClose?: () => void }) {
+  if (!message) return null;
+  return (
+    <div role="status" className="mt-4 flex items-start gap-3 rounded-md bg-palm/10 px-4 py-3 text-sm text-palm">
+      <span className="flex-1">{message}</span>
+      {onClose && <button type="button" className="font-medium underline" onClick={onClose}>Dismiss</button>}
+    </div>
+  );
+}
+
 export function seatsLeft(t: { capacity: number; registeredCount: number }) {
   return Math.max(0, t.capacity - t.registeredCount);
 }
@@ -53,3 +64,13 @@ export function formatDate(d?: string) {
   const date = new Date(`${d}T00:00:00`);
   return isNaN(date.getTime()) ? d : date.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
 }
+
+/** Old registrations have no passport/nationality/date — show a dash rather than nothing. */
+export const orDash = (v?: string | null) => (v && String(v).trim()) || '—';
+
+/** "Sat, 15 Nov 2026" when there is a date, "No fixed date" when there isn't. */
+export const formatTourDate = (d?: string) => (d ? formatDate(d) : 'No fixed date');
+
+/** One line that names a trip: "08:30 · Sat, 15 Nov 2026 · SABIC - Home of Innovation". */
+export const tripLabel = (t: { departureTime: string; date: string; tourName: string }) =>
+  `${t.departureTime} · ${formatTourDate(t.date)} · ${t.tourName}`;

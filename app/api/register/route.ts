@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { randomInt } from 'crypto';
 import { FieldValue } from 'firebase-admin/firestore';
 import { adminDb } from '@/lib/firebase-admin';
-import { normalize, validate } from '@/lib/validation';
+import { isRestricted, normalize, restrictionMessage, validate, type TourRules } from '@/lib/validation';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,9 +19,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ message: 'The form could not be read. Reload the page and try again.' }, { status: 400 });
 
   const input = normalize(body);
+  // Everything that doesn't need the tour: required fields, formats, dates in the past.
   const errors = validate(input);
   if (Object.keys(errors).length) return NextResponse.json({ errors }, { status: 400 });
-  const { name, email, phone, tourId } = input;
+  const { name, email, phone, passportNumber, nationality, tourId, tourDate } = input;
 
   try {
     const db = adminDb();
@@ -34,12 +35,30 @@ export async function POST(req: Request) {
       const tour = tourSnap.data();
       if (!tour) throw new HttpError(404, 'This tour no longer exists. Choose another tour.', 'tourId');
       if (!tour.active) throw new HttpError(409, 'Registration for this tour is closed. Choose another tour.', 'tourId');
+
+      // The nationality restriction is enforced here, not only in the browser.
+      const rules: TourRules = {
+        name: tour.name,
+        date: tour.date,
+        restrictedNationalities: tour.restrictedNationalities ?? [],
+      };
+      if (isRestricted(rules, nationality))
+        throw new HttpError(409, restrictionMessage(rules), 'nationality');
+
+      if (tour.date && tourDate !== tour.date)
+        throw new HttpError(409, `This tour runs on ${tour.date}. Choose that date.`, 'tourDate');
+
       if ((tour.registeredCount ?? 0) >= tour.capacity)
         throw new HttpError(409, 'This tour is full. Choose another tour.', 'tourId');
 
-      const existing = await tx.get(regs.where('email', '==', email).where('tourId', '==', tourId));
+      // One passport per tour per day — a cancelled registration frees it up again.
+      const existing = await tx.get(
+        regs.where('passportNumber', '==', passportNumber)
+          .where('tourId', '==', tourId)
+          .where('tourDate', '==', tourDate)
+      );
       if (existing.docs.some((d) => d.data().status !== 'cancelled'))
-        throw new HttpError(409, 'This email is already registered for this tour. Check your inbox for your code, or choose another tour.', 'email');
+        throw new HttpError(409, 'This passport is already registered for this tour on this date.', 'passportNumber');
 
       let code = newCode();
       for (let i = 0; (await tx.get(regs.doc(code))).exists; i++) {
@@ -49,23 +68,25 @@ export async function POST(req: Request) {
 
       // --- writes ---
       tx.create(regs.doc(code), {
-        name, email, phone, tourId,
-        tourName: tour.name, slot: tour.slot,
+        name, email: email || null, phone, passportNumber, nationality,
+        tourId, tourName: tour.name, slot: tour.slot,
+        tourDate, departureTime: tour.departureTime,
         status: 'pending', busNumber: null, flag: null,
         createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
         updatedBy: 'visitor',
       });
       tx.update(tourRef, { registeredCount: FieldValue.increment(1) });
 
-      if (process.env.ENABLE_CONFIRMATION_EMAIL === 'true') {
-        const when = `${tour.departureTime}${tour.date ? ` on ${tour.date}` : ''}`;
+      // No email address, no email.
+      if (email && process.env.ENABLE_CONFIRMATION_EMAIL === 'true') {
         tx.set(db.collection('mail').doc(), {
           to: email,
           message: {
             subject: `Your tour code ${code} – ${tour.name}`,
             text:
               `Hi ${name.split(' ')[0]},\n\nYou're registered for ${tour.name}.\n\n` +
-              `Your code: ${code}\nPickup point: ${tour.pickupPoint}\nBus leaves: ${when}\n\n` +
+              `Your code: ${code}\nPickup point: ${tour.pickupPoint}\n` +
+              `Bus leaves: ${tour.departureTime} on ${tourDate}\n\n` +
               `Arrive 15 minutes before departure and show this code to our team.\n`,
           },
         });

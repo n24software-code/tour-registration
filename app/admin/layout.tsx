@@ -6,6 +6,7 @@ import { signOut } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { useAuth } from '@/lib/auth';
 import { can, ROLE_LABEL, type Permission } from '@/lib/roles';
+import { Logos } from '@/components/Logos';
 
 const NAV: { href: string; label: string; perm: Permission }[] = [
   { href: '/admin', label: 'Overview', perm: 'viewOverview' },
@@ -43,7 +44,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     <div className="min-h-screen">
       <header className="border-b border-ink/10 bg-white">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 sm:px-5">
-          <span className="font-semibold">Tour operations</span>
+          <Link href="/admin" className="flex items-center gap-3">
+            <Logos size="small" className="hidden md:flex" />
+            <span className="font-semibold">Tour operations</span>
+          </Link>
           <div className="ml-auto flex items-center gap-3 text-sm sm:order-last">
             <span className="text-ink/70"><span className="font-medium text-ink">{admin.name}</span> · {ROLE_LABEL[admin.role]}</span>
             <button className="btn-ghost btn-sm" onClick={() => signOut(auth)}>Sign out</button>

@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { getAuth } from 'firebase-admin/auth';
-import { adminApp, adminDb, isTestEmail } from './helpers';
+import { adminApp, adminDb, TEST_PASSPORT_PREFIX, isTestReg } from './helpers';
 import { SNAPSHOT_PATH } from './global-setup';
 
 /** Throwaway team logins the Team spec creates. */
@@ -8,17 +8,27 @@ const MEMBER_PREFIX = 'e2e-member-';
 
 /**
  * Removes ONLY the suite's own data:
- *   - registrations whose email looks like e2e+<ts>@tour.test
- *   - auditLogs rows pointing at those registration codes
+ *   - registrations whose email looks like e2e+<ts>@tour.test, or whose passport
+ *     starts with E2E (email is optional, so passport is the reliable marker)
+ *   - auditLogs rows pointing at those registration codes, plus the two kinds that
+ *     have no surviving registration to point at: "registration:delete" (the row is
+ *     gone, but its detail names an E2E passport) and "registrations:export" (no regId
+ *     at all, so they are matched by action + written-during-this-run)
  *   - tours added by the Tours test (name starts with "E2E ")
  * Then restores each surviving tour's capacity / registeredCount / active / pickup / time / date.
  */
 export default async function globalTeardown() {
   const db = adminDb();
+  const saved = existsSync(SNAPSHOT_PATH)
+    ? (JSON.parse(readFileSync(SNAPSHOT_PATH, 'utf8')) as {
+        startedAt?: number; tours: Array<Record<string, unknown>>;
+      })
+    : undefined;
+  const startedAt = saved?.startedAt;
 
   // --- test registrations -------------------------------------------------
   const regs = await db.collection('registrations').get();
-  const testCodes = regs.docs.filter((d) => isTestEmail(String(d.data().email ?? ''))).map((d) => d.id);
+  const testCodes = regs.docs.filter((d) => isTestReg(d.data())).map((d) => d.id);
 
   let deletedRegs = 0;
   for (const chunk of batches(testCodes, 400)) {
@@ -37,6 +47,25 @@ export default async function globalTeardown() {
     snap.docs.forEach((d) => b.delete(d.ref));
     await b.commit();
     deletedLogs += snap.size;
+  }
+
+  // Rows whose registration the suite deleted on purpose: the code is gone, but the
+  // detail still names the E2E passport that only this suite ever invents.
+  const deleteLogs = await db.collection('auditLogs').where('action', '==', 'registration:delete').get();
+  for (const d of deleteLogs.docs) {
+    if (String(d.data().detail ?? '').includes(`passport ${TEST_PASSPORT_PREFIX}`)) {
+      await d.ref.delete();
+      deletedLogs++;
+    }
+  }
+
+  // Export rows have no regId, so they are matched by action + this run's start time.
+  if (startedAt) {
+    const exportLogs = await db.collection('auditLogs').where('action', '==', 'registrations:export').get();
+    for (const d of exportLogs.docs) {
+      const at = d.data().at?.toMillis?.() ?? 0;
+      if (at >= startedAt) { await d.ref.delete(); deletedLogs++; }
+    }
   }
 
   // --- throwaway team logins -------------------------------------------
@@ -71,14 +100,14 @@ export default async function globalTeardown() {
 
   // --- restore the pre-test tour state -----------------------------------
   let restored = 0;
-  if (existsSync(SNAPSHOT_PATH)) {
-    const saved = JSON.parse(readFileSync(SNAPSHOT_PATH, 'utf8')) as Array<Record<string, unknown>>;
-    for (const t of saved) {
+  if (saved) {
+    for (const t of saved.tours) {
       const ref = db.collection('tours').doc(t.id as string);
       if (!(await ref.get()).exists) continue;
       await ref.update({
         capacity: t.capacity, registeredCount: t.registeredCount, active: t.active,
         pickupPoint: t.pickupPoint, departureTime: t.departureTime, date: t.date, name: t.name,
+        restrictedNationalities: t.restrictedNationalities,
       });
       restored++;
     }

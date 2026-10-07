@@ -1,4 +1,23 @@
 {
-  "indexes": [],
+  "indexes": [
+    {
+      "collectionGroup": "registrations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "passportNumber",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "tourId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "tourDate",
+          "order": "ASCENDING"
+        }
+      ]
+    }
+  ],
   "fieldOverrides": []
 }
