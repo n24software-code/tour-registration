@@ -13,9 +13,9 @@ import ministry from '@/public/logos/logo3.png';
  * without ever cropping or distorting it.
  */
 const LOGOS = [
-  { src: ministry, alt: 'Ministry of Energy' },
-  { src: congress, alt: '25th WPC Energy Congress, 11–15 October 2026' },
-  { src: wpcEnergy, alt: 'WPC Energy' },
+  { src: wpcEnergy, alt: "WPC Energy" },
+  { src: congress, alt: "25th WPC Energy Congress, 11–15 October 2026" },
+  { src: ministry, alt: "Ministry of Energy" },
 ] as const;
 
 /** 32px on a phone, 56px from `sm` up. Admin uses 28px throughout. */
