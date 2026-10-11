@@ -113,7 +113,7 @@ test.describe('Mobile number', () => {
 
     await signIn(page, 'registration');
     await page.goto('/admin/registrations');
-    await page.locator('tr', { hasText: code }).getByRole('button', { name: 'Confirm' }).click();
+    await page.locator('tr', { hasText: code }).getByRole('button', { name: 'Confirm', exact: true }).click();
     await expect.poll(async () => (await getReg(code))?.status, { timeout: 20_000 }).toBe('confirmed');
     await page.getByRole('button', { name: 'Sign out' }).click();
 

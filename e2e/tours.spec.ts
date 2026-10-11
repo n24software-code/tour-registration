@@ -3,17 +3,24 @@ import { TOUR_IDS, getTour, patchTour, registerVisitor, signIn, testEmail, admin
 
 const TOUR = TOUR_IDS.sabic;
 
+/**
+ * Two batches of one destination share a name, so the Tours page labels its fields
+ * with the batch as well. This mirrors that.
+ */
+const labelled = (t: { name: string; batch?: number | null }) =>
+  t.batch ? `${t.name} Batch ${t.batch}` : t.name;
+
 test.describe('Tours (PM)', () => {
   test('edit pickup point, time and date, then save', async ({ page }) => {
     await signIn(page, 'pm');
     await page.goto('/admin/tours');
 
     const tour = await getTour(TOUR);
-    await page.getByLabel(`Pickup point for ${tour.name}`).fill('Gate 4 - North car park');
-    await page.getByLabel(`Departure time for ${tour.name}`).fill('09:45');
-    await page.getByLabel(`Date for ${tour.name}`).fill('2026-11-20');
+    await page.getByLabel(`Pickup point for ${labelled(tour)}`).fill('Gate 4 - North car park');
+    await page.getByLabel(`Departure time for ${labelled(tour)}`).fill('09:45');
+    await page.getByLabel(`Date for ${labelled(tour)}`).fill('2026-11-20');
 
-    const row = page.locator('tr', { has: page.getByLabel(`Pickup point for ${tour.name}`) });
+    const row = page.locator('tr', { has: page.getByLabel(`Pickup point for ${labelled(tour)}`) });
     await row.getByRole('button', { name: 'Save' }).click();
     await expect(row.getByRole('button', { name: 'Saved' })).toBeVisible();
 
@@ -33,7 +40,7 @@ test.describe('Tours (PM)', () => {
     await signIn(page, 'pm');
     await page.goto('/admin/tours');
 
-    const capacity = page.getByLabel(`Capacity for ${tour.name}`);
+    const capacity = page.getByLabel(`Capacity for ${labelled(tour)}`);
     const row = page.locator('tr', { has: capacity });
     await capacity.fill(String(tour.registeredCount - 1));
 
@@ -51,7 +58,7 @@ test.describe('Tours (PM)', () => {
     await page.goto('/admin/tours');
 
     const tour = await getTour(TOUR_IDS.downtown);
-    const row = page.locator('tr', { has: page.getByLabel(`Pickup point for ${tour.name}`) });
+    const row = page.locator('tr', { has: page.getByLabel(`Pickup point for ${labelled(tour)}`) });
     await row.getByRole('checkbox').uncheck();
     await row.getByRole('button', { name: 'Save' }).click();
     await expect(row.getByRole('button', { name: 'Saved' })).toBeVisible();
@@ -97,11 +104,23 @@ test.describe('Tours (PM)', () => {
   });
 });
 
-/** Polls for a tour by name, tolerating brief index lag after a create. */
+/** Polls for a tour by name, tolerating the moment between the insert and the read. */
 async function findTourByName(name: string) {
   for (let i = 0; i < 40; i++) {
-    const snap = await adminDb().collection('tours').where('name', '==', name).get();
-    if (!snap.empty) return snap.docs[0];
+    const { data } = await adminDb().from('tours').select('*').eq('name', name).maybeSingle();
+    if (data) {
+      const r = data as Record<string, unknown>;
+      return {
+        id: r.id as string,
+        data: () => ({
+          name: r.name, slot: r.slot, pickupPoint: r.pickup_point,
+          departureTime: String(r.departure_time ?? '').slice(0, 5),
+          capacity: r.capacity, registeredCount: r.registered_count, active: r.active,
+          restrictedNationalities: r.restricted_nationalities ?? [],
+          batch: r.batch ?? null,
+        }),
+      };
+    }
     await new Promise((r) => setTimeout(r, 500));
   }
   return undefined;

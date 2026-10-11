@@ -1,18 +1,19 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '@/lib/firebase';
+import { supabaseBrowser } from '@/lib/supabase/client';
 import { useAuth } from '@/lib/auth';
 import { LogoBand } from '@/components/Logos';
 
-const MESSAGES: Record<string, string> = {
-  'auth/invalid-credential': 'Email or password is incorrect. Check both and try again.',
-  'auth/invalid-email': 'Enter a valid email address.',
-  'auth/too-many-requests': 'Too many attempts. Wait a few minutes, then try again.',
-  'auth/network-request-failed': 'No connection. Check your internet and try again.',
-  'auth/user-disabled': 'This account is disabled. Ask the Product Owner for help.',
-};
+/** Supabase phrases these for developers; these are the words staff see. */
+function friendly(message: string) {
+  const m = message.toLowerCase();
+  if (m.includes('invalid login credentials')) return 'Email or password is incorrect. Check both and try again.';
+  if (m.includes('email not confirmed')) return 'This account is not confirmed yet. Ask the Product Owner for help.';
+  if (m.includes('rate limit') || m.includes('too many')) return 'Too many attempts. Wait a few minutes, then try again.';
+  if (m.includes('failed to fetch') || m.includes('network')) return 'No connection. Check your internet and try again.';
+  return 'Sign in failed. Try again.';
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -28,8 +29,11 @@ export default function LoginPage() {
     e.preventDefault(); setError('');
     if (!email || !password) return setError('Enter your email and password.');
     setBusy(true);
-    try { await signInWithEmailAndPassword(auth, email.trim(), password); }
-    catch (err) { setError(MESSAGES[(err as { code?: string }).code ?? ''] ?? 'Sign in failed. Try again.'); setBusy(false); }
+    const { error: signInError } = await supabaseBrowser().auth.signInWithPassword({
+      email: email.trim().toLowerCase(),
+      password,
+    });
+    if (signInError) { setError(friendly(signInError.message)); setBusy(false); }
   }
 
   return (

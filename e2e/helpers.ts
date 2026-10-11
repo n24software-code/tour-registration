@@ -2,8 +2,7 @@ import { readFileSync } from 'node:fs';
 import { randomInt } from 'node:crypto';
 import type { Page } from '@playwright/test';
 import { expect } from '@playwright/test';
-import { cert, getApps, initializeApp, type App } from 'firebase-admin/app';
-import { getFirestore, type Firestore } from 'firebase-admin/firestore';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 
 dotenv.config({ path: '.env.local' });
@@ -62,21 +61,38 @@ export function dayAfter(days: number) {
   return d.toISOString().slice(0, 10);
 }
 
-// ---------------------------------------------------------------- Admin SDK
+// ---------------------------------------------------------------- Supabase
 
-let app: App | undefined;
-export function adminApp(): App {
-  if (app) return app;
-  app = getApps()[0] ?? initializeApp({
-    credential: cert({
-      projectId: process.env.FIREBASE_PROJECT_ID!,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL!,
-      privateKey: (process.env.FIREBASE_PRIVATE_KEY ?? '').replace(/\\n/g, '\n'),
-    }),
-  });
-  return app;
+let admin: SupabaseClient | undefined;
+/** The secret-key client: bypasses RLS, for setting up and tearing down test data. */
+export function adminDb(): SupabaseClient {
+  admin ??= createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SECRET_KEY!,
+    { auth: { persistSession: false, autoRefreshToken: false } }
+  );
+  return admin;
 }
-export const adminDb = (): Firestore => getFirestore(adminApp());
+
+/** A client signed in as one of the team roles, for the RLS tests. */
+export async function clientAs(role: Role) {
+  const { email, password } = CREDS[role];
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+    { auth: { persistSession: false, autoRefreshToken: false } }
+  );
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw new Error(`could not sign in as ${role}: ${error.message}`);
+  return supabase;
+}
+
+/** An anonymous client — the publishable key with no session. */
+export const anonClient = () => createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+  { auth: { persistSession: false, autoRefreshToken: false } }
+);
 
 // ---------------------------------------------------------------- credentials
 
@@ -288,10 +304,10 @@ export function registrationBody(over: Record<string, unknown> = {}) {
 
 export const TOUR_IDS = {
   kapsarc: 'kapsarc-black-gold',
-  sabic: 'sabic-home-of-innovation',
-  sabicB2: 'sabic-home-of-innovation-b2',
-  aramco: 'aramco-kafd',
-  aramcoB2: 'aramco-kafd-b2',
+  sabic: 'sabic-b1',
+  sabicB2: 'sabic-b2',
+  aramco: 'aramco-b1',
+  aramcoB2: 'aramco-b2',
   diriyah: 'diriyah-heritage-trail',
   downtown: 'downtown-national-history',
 } as const;
@@ -319,16 +335,14 @@ export async function fillSeats(tourId: string, taken?: number) {
   return before;
 }
 
-/**
- * Boulevard City was created through the admin UI, so its document id is generated
- * rather than a slug. It is looked up by name once per run.
- */
+/** Looked up by name once per run, so a change of id doesn't break the specs. */
 let boulevardId: string | undefined;
 export async function boulevardTourId() {
   if (boulevardId) return boulevardId;
-  const snap = await adminDb().collection('tours').where('name', '==', 'Boulevard City').limit(1).get();
-  if (snap.empty) throw new Error('No "Boulevard City" tour. Run `npm run migrate`.');
-  boulevardId = snap.docs[0].id;
+  const { data } = await adminDb()
+    .from('tours').select('id').eq('name', 'Boulevard City').limit(1).maybeSingle();
+  if (!data) throw new Error('No "Boulevard City" tour. Run `npm run seed`.');
+  boulevardId = (data as { id: string }).id;
   return boulevardId;
 }
 
@@ -341,17 +355,48 @@ export const BOULEVARD_NOTICES = [
 ];
 
 export async function getTour(tourId: string) {
-  const snap = await adminDb().collection('tours').doc(tourId).get();
-  return snap.data() as {
-    name: string; slot: string; pickupPoint: string; departureTime: string;
-    date?: string; capacity: number; registeredCount: number; active: boolean; order: number;
-    restrictedNationalities?: string[]; experienceDuration?: string; notices?: string[];
-    destinationId?: string; batch?: number | null;
+  const { data } = await adminDb().from('tours').select('*').eq('id', tourId).maybeSingle();
+  if (!data) throw new Error(`No tour "${tourId}".`);
+  const r = data as Record<string, unknown>;
+  return {
+    name: r.name as string,
+    slot: r.slot as string,
+    pickupPoint: r.pickup_point as string,
+    departureTime: String(r.departure_time ?? '').slice(0, 5),
+    date: (r.tour_date as string | null) ?? '',
+    capacity: r.capacity as number,
+    registeredCount: r.registered_count as number,
+    active: r.active as boolean,
+    order: r.sort_order as number,
+    restrictedNationalities: (r.restricted_nationalities as string[]) ?? [],
+    experienceDuration: (r.experience_duration as string | null) ?? '',
+    notices: (r.notices as string[]) ?? [],
+    destinationId: r.destination_id as string,
+    batch: (r.batch as number | null) ?? null,
   };
 }
 
-export const patchTour = (tourId: string, patch: Record<string, unknown>) =>
-  adminDb().collection('tours').doc(tourId).update(patch);
+/** The specs patch tours in camelCase; these are the real column names. */
+const TOUR_COLUMNS: Record<string, string> = {
+  registeredCount: 'registered_count',
+  departureTime: 'departure_time',
+  pickupPoint: 'pickup_point',
+  date: 'tour_date',
+  order: 'sort_order',
+  restrictedNationalities: 'restricted_nationalities',
+  experienceDuration: 'experience_duration',
+  destinationId: 'destination_id',
+};
+
+export async function patchTour(tourId: string, patch: Record<string, unknown>) {
+  const row: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(patch)) {
+    const col = TOUR_COLUMNS[k] ?? k;
+    row[col] = col === 'tour_date' && v === '' ? null : v;
+  }
+  const { error } = await adminDb().from('tours').update(row).eq('id', tourId);
+  if (error) throw new Error(`patchTour(${tourId}): ${error.message}`);
+}
 
 /** Fills a tour so the public form shows it as Full: capacity = registeredCount. */
 export async function fillTour(tourId: string) {
@@ -359,47 +404,110 @@ export async function fillTour(tourId: string) {
   await patchTour(tourId, { capacity: Math.max(1, t.registeredCount) });
 }
 
-export const getReg = async (code: string) =>
-  (await adminDb().collection('registrations').doc(code).get()).data() as
-    | {
-        status: string; busNumber?: string | null; flag?: string | null;
-        email?: string | null; name: string; phone: string; phoneCountry?: string;
-        idType?: 'national_id' | 'passport'; idNumber?: string;
-        nationality?: string; tourDate?: string; departureTime?: string; batch?: number | null;
-        conditionsAcceptedAt?: unknown; mailId?: string | null;
-      }
-    | undefined;
+export interface RegShape {
+  status: string;
+  busNumber?: string | null;
+  flag?: string | null;
+  email?: string | null;
+  name: string;
+  phone: string;
+  phoneCountry?: string;
+  idType?: 'national_id' | 'passport';
+  idNumber?: string;
+  nationality?: string;
+  tourId?: string;
+  tourDate?: string;
+  departureTime?: string;
+  batch?: number | null;
+  conditionsAcceptedAt?: unknown;
+}
 
-// ---------------------------------------------------------------- mail
+export async function getReg(code: string): Promise<RegShape | undefined> {
+  const { data } = await adminDb()
+    .from('registrations').select('*').eq('code', code).maybeSingle();
+  if (!data) return undefined;
+  const r = data as Record<string, unknown>;
+  return {
+    status: r.status as string,
+    busNumber: (r.bus_number as string | null) ?? null,
+    flag: (r.flag as string | null) ?? null,
+    email: (r.email as string | null) ?? null,
+    name: r.name as string,
+    phone: r.phone as string,
+    phoneCountry: r.phone_country as string,
+    idType: r.id_type as 'national_id' | 'passport',
+    idNumber: r.id_number as string,
+    nationality: r.nationality as string,
+    tourId: r.tour_id as string,
+    tourDate: (r.tour_date as string | null) ?? '',
+    departureTime: String(r.departure_time ?? '').slice(0, 5),
+    batch: (r.batch as number | null) ?? null,
+    conditionsAcceptedAt: r.conditions_accepted_at,
+  };
+}
 
-export interface MailDoc {
+// ---------------------------------------------------------------- outbox
+
+export interface OutboxShape {
   id: string;
+  regCode: string | null;
   to: string;
-  from?: string;
-  message: { subject: string; text: string; html: string };
+  subject: string | null;
+  text: string | null;
+  html: string | null;
+  status: 'pending' | 'sent' | 'error';
+  attempts: number;
+  error: string | null;
 }
 
-/** The booking confirmation queued for a registration, via its stored mailId. */
-export async function mailFor(code: string): Promise<MailDoc | undefined> {
-  const reg = await getReg(code);
-  if (!reg?.mailId) return undefined;
-  const snap = await adminDb().collection('mail').doc(reg.mailId).get();
-  if (!snap.exists) return undefined;
-  return { id: snap.id, ...(snap.data() as Omit<MailDoc, 'id'>) };
+const toOutbox = (r: Record<string, unknown>): OutboxShape => ({
+  id: r.id as string,
+  regCode: (r.reg_code as string | null) ?? null,
+  to: r.to_email as string,
+  subject: (r.subject as string | null) ?? null,
+  text: (r.text as string | null) ?? null,
+  html: (r.html as string | null) ?? null,
+  status: r.status as OutboxShape['status'],
+  attempts: r.attempts as number,
+  error: (r.error as string | null) ?? null,
+});
+
+/** Every outbox row for a registration, oldest first. */
+export async function outboxFor(code: string): Promise<OutboxShape[]> {
+  const { data } = await adminDb()
+    .from('email_outbox').select('*').eq('reg_code', code)
+    .order('created_at', { ascending: true });
+  return (data ?? []).map((r) => toOutbox(r as Record<string, unknown>));
 }
 
-/** Every mail document addressed to one visitor — used to prove there is exactly one. */
-export async function mailsTo(email: string) {
-  const snap = await adminDb().collection('mail').where('to', '==', email).get();
-  return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<MailDoc, 'id'>) }));
+/** The newest outbox row for a registration. */
+export async function mailFor(code: string): Promise<OutboxShape | undefined> {
+  const rows = await outboxFor(code);
+  return rows[rows.length - 1];
+}
+
+export async function mailsTo(email: string): Promise<OutboxShape[]> {
+  const { data } = await adminDb()
+    .from('email_outbox').select('*').eq('to_email', email)
+    .order('created_at', { ascending: true });
+  return (data ?? []).map((r) => toOutbox(r as Record<string, unknown>));
 }
 
 /** Audit entries for one registration, newest first. */
 export async function auditFor(regId: string) {
-  const snap = await adminDb().collection('auditLogs').where('regId', '==', regId).get();
-  return snap.docs.map((d) => d.data() as {
-    action: string; regId: string | null; detail: string | null;
-    byUid: string; byEmail: string; byRole: Role;
+  const { data } = await adminDb()
+    .from('audit_logs').select('*').eq('reg_code', regId)
+    .order('at', { ascending: false });
+  return (data ?? []).map((d) => {
+    const r = d as Record<string, unknown>;
+    return {
+      action: r.action as string,
+      regId: (r.reg_code as string | null) ?? null,
+      detail: (r.detail as string | null) ?? null,
+      byUid: (r.by_uid as string | null) ?? '',
+      byEmail: (r.by_email as string | null) ?? '',
+      byRole: r.by_role as Role,
+    };
   });
 }
 
@@ -419,8 +527,14 @@ export async function waitForAudit(regId: string, action: string, timeoutMs = 15
 /** The admins/{uid} doc for a role, looked up by the email in test-accounts.local.md. */
 export async function adminDocFor(role: Role) {
   const email = CREDS[role].email;
-  const snap = await adminDb().collection('admins').where('email', '==', email).get();
-  if (snap.empty) throw new Error(`No admins doc for ${email}. Run \`npm run test-admins\`.`);
-  const d = snap.docs[0];
-  return { uid: d.id, ...(d.data() as { email: string; name: string; role: Role }) };
+  const { data } = await adminDb()
+    .from('admins').select('*').eq('email', email).maybeSingle();
+  if (!data) throw new Error(`No admins row for ${email}. Run \`npm run create-admins\`.`);
+  const r = data as Record<string, unknown>;
+  return {
+    uid: r.user_id as string,
+    email: r.email as string,
+    name: r.name as string,
+    role: r.role as Role,
+  };
 }

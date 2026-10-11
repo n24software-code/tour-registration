@@ -15,12 +15,13 @@ const TOUR = TOUR_IDS.kapsarc;
 
 const HEADERS = [
   'Code', 'Full name', 'Mobile', 'ID type', 'ID number', 'Nationality', 'Email',
-  'Tour', 'Date', 'Departure time', 'Pickup point', 'Status', 'Bus', 'Flag', 'Registered at',
+  'Tour', 'Batch', 'Date', 'Departure time', 'Pickup point', 'Status', 'Bus', 'Flag',
+  'Registered at',
 ];
 
 const SUMMARY_HEADERS = [
-  'Tour', 'Date', 'Departure time', 'Pickup point', 'Capacity', 'Registered', 'Seats left',
-  'Pending', 'Confirmed', 'At pickup', 'On bus', 'No-show', 'Cancelled', 'Flagged',
+  'Tour', 'Batch', 'Date', 'Departure time', 'Pickup point', 'Capacity', 'Registered',
+  'Seats left', 'Pending', 'Confirmed', 'At pickup', 'On bus', 'No-show', 'Cancelled', 'Flagged',
 ];
 
 /** Mirrors formatDate() in components/ui.tsx. */
@@ -159,8 +160,8 @@ test.describe('Excel export', () => {
       const v = (summary.getRow(i).values as unknown[]).slice(1);
       if (!v[0]) continue;
       summarised++;
-      const [tourName, dateCell, departure] = [String(v[0]), v[1], String(v[2])];
-      const registered = Number(v[5]);
+      const [tourName, dateCell, departure] = [String(v[0]), v[2], String(v[3])];
+      const registered = Number(v[6]);
       const dateText = dateCell instanceof Date
         ? dateCell.toISOString().slice(0, 10)
         : 'No fixed date';
@@ -173,7 +174,7 @@ test.describe('Excel export', () => {
       expect(notCancelled, `Summary says ${registered} registered for ${wanted}`)
         .toHaveLength(registered);
       // Capacity and seats left agree with each other.
-      expect(Number(v[4]) - registered).toBe(Number(v[6]));
+      expect(Number(v[5]) - registered).toBe(Number(v[7]));
     }
     expect(summarised).toBe(tripSheets.length);
 
@@ -246,10 +247,10 @@ test.describe('Excel export', () => {
     await expect(page.getByRole('status')).toContainText('Exported 1 participant');
 
     await expect.poll(async () => {
-      const snap = await adminDb().collection('auditLogs')
-        .where('action', '==', 'registrations:export').get();
-      return snap.docs
-        .map((d) => String(d.data().detail ?? ''))
+      const { data } = await adminDb()
+        .from('audit_logs').select('detail').eq('action', 'registrations:export');
+      return (data ?? [])
+        .map((d) => String(d.detail ?? ''))
         .filter((detail) => detail.includes(date) && detail.includes(tour.name) && detail.includes('1 row'));
     }, { timeout: 20_000 }).not.toHaveLength(0);
 

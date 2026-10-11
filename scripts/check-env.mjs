@@ -1,19 +1,29 @@
-// Reports only "set" or "missing" for each key. Never prints values.
+// Tells you which environment variables are set, without ever printing a value.
+//   npm run check-env
 import dotenv from 'dotenv';
 dotenv.config({ path: '.env.local' });
 dotenv.config();
 
-const KEYS = [
-  'NEXT_PUBLIC_FIREBASE_API_KEY', 'NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN', 'NEXT_PUBLIC_FIREBASE_PROJECT_ID',
-  'NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET', 'NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID', 'NEXT_PUBLIC_FIREBASE_APP_ID',
-  'FIREBASE_PROJECT_ID', 'FIREBASE_CLIENT_EMAIL', 'FIREBASE_PRIVATE_KEY',
-];
+const GROUPS = {
+  'Supabase (required)': [
+    'NEXT_PUBLIC_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY', 'SUPABASE_SECRET_KEY',
+  ],
+  'Supabase CLI (only for db push)': ['SUPABASE_DB_PASSWORD'],
+  'Site': ['NEXT_PUBLIC_SITE_URL'],
+  'Email (required for confirmations)': [
+    'SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS', 'MAIL_FROM',
+  ],
+  'Optional': ['CRON_SECRET'],
+};
 
-let bad = 0;
-for (const k of KEYS) {
-  const v = process.env[k] ?? '';
-  const ok = v !== '' && v !== 'REPLACE_ME' && !v.includes('REPLACE_ME');
-  if (!ok) bad++;
-  console.log(`${ok ? 'set     ' : 'MISSING '} ${k}`);
+let missing = 0;
+for (const [group, keys] of Object.entries(GROUPS)) {
+  console.log(`\n${group}`);
+  for (const k of keys) {
+    const set = !!process.env[k]?.trim();
+    if (!set && !group.startsWith('Optional')) missing++;
+    console.log(`  ${set ? '✓' : '✗'} ${k}`);
+  }
 }
-process.exit(bad ? 1 : 0);
+console.log(missing ? `\n${missing} required variable(s) missing.` : '\nAll required variables are set.');
+process.exit(missing ? 1 : 0);

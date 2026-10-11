@@ -214,7 +214,7 @@ function Section({
                 {rows.map((r) => (
                   <Row key={r.id} reg={r} admin={admin} run={run} busy={busy}
                     onDelete={onDelete} onResend={onResend}
-                    mail={r.mailId ? mailStatuses.get(r.mailId) : undefined} />
+                    mail={mailStatuses.get(r.id)} />
                 ))}
               </tbody>
             </table>

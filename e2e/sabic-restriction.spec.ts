@@ -20,8 +20,11 @@ const MESSAGE =
   "Visitors with Iraqi, Yemeni, Lebanese or Syrian nationality can't join the SABIC tour. "
   + 'Please choose another tour.';
 
+/** SABIC runs in batches, so the destination is one card holding both departures. */
 const sabicCard = (page: import('@playwright/test').Page) =>
-  page.locator('label', { has: page.locator(`input[name="tour"][value="${TOUR_IDS.sabic}"]`) });
+  page.locator('[data-destination="sabic"]');
+
+const SABIC_BATCHES = [TOUR_IDS.sabic, TOUR_IDS.sabicB2];
 
 test.describe('SABIC nationality restriction', () => {
   test('the rule is stored on the tour, and only on SABIC', async () => {
@@ -40,8 +43,9 @@ test.describe('SABIC nationality restriction', () => {
       await chooseNationality(page, label);
 
       const card = sabicCard(page);
-      await expect(card.locator('input[name="tour"]')).toBeDisabled();
       await expect(card).toContainText(MESSAGE);
+      // A blocked destination offers no departure at all, not a disabled one.
+      await expect(card.locator('input[name="tour"]')).toHaveCount(0);
 
       // Other tours stay available.
       await expect(page.locator(`input[name="tour"][value="${TOUR_IDS.kapsarc}"]`)).toBeEnabled();
@@ -53,25 +57,27 @@ test.describe('SABIC nationality restriction', () => {
     await chooseNationality(page, 'Saudi');
 
     const radio = page.locator(`input[name="tour"][value="${TOUR_IDS.sabic}"]`);
-    await sabicCard(page).click();
+    await sabicCard(page).locator(`label`, { has: radio }).click();
     await expect(radio).toBeChecked();
 
     // Now switch to a blocked nationality: the selection has to go.
     await chooseNationality(page, 'Syrian');
-    await expect(radio).not.toBeChecked();
-    await expect(radio).toBeDisabled();
+    await expect(page.locator(`input[name="tour"][value="${TOUR_IDS.sabic}"]`)).toHaveCount(0);
     await expect(page.locator('.field-error', { hasText: MESSAGE })).toBeVisible();
   });
 
   for (const { code, label } of BLOCKED) {
     test(`server: POST /api/register with nationality ${code} (${label}) is refused`, async ({ page }) => {
-      const res = await page.request.post('/api/register', {
-        data: registrationBody({ tourId: TOUR_IDS.sabic, nationality: code }),
-      });
-      expect(res.status()).toBe(409);
-      const body = await res.json();
-      expect(body.message).toBe(MESSAGE);
-      expect(body.errors.nationality).toBe(MESSAGE);
+      // Both batches carry the restriction, so both must refuse.
+      for (const tourId of SABIC_BATCHES) {
+        const res = await page.request.post('/api/register', {
+          data: registrationBody({ tourId, nationality: code }),
+        });
+        expect(res.status(), `${tourId}`).toBe(409);
+        const body = await res.json();
+        expect(body.message).toBe(MESSAGE);
+        expect(body.errors.nationality).toBe(MESSAGE);
+      }
     });
   }
 
@@ -107,7 +113,8 @@ test.describe('SABIC nationality restriction', () => {
     await page.goto('/admin/tours');
 
     const sabic = await getTour(TOUR_IDS.sabic);
-    const picker = page.getByLabel(`Restricted nationalities for ${sabic.name}`);
+    // Two batches share a name, so the label names the batch too.
+    const picker = page.getByLabel(`Restricted nationalities for ${sabic.name} Batch 1`);
     // toHaveValues reports DOM (alphabetical) order, not the order the tour stores.
     await expect(picker).toHaveValues(['IQ', 'LB', 'SY', 'YE']);
 

@@ -1,6 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { CREDS, adminApp, adminDb, signIn } from './helpers';
-import { getAuth } from 'firebase-admin/auth';
+import { CREDS, adminDb, signIn } from './helpers';
 
 test.describe('Team (PO)', () => {
   test('you cannot change your own role or remove yourself', async ({ page }) => {
@@ -80,14 +79,9 @@ test.describe('Team (PO)', () => {
   });
 });
 
-/**
- * Resolves the role through the Auth uid and a direct document read. A
- * `where('email','==',...)` query is index-backed and can lag a just-committed
- * write by a moment; a document read is strongly consistent.
- */
+/** The role on record for an email, or undefined once their access is removed. */
 async function roleOf(email: string) {
-  const user = await getAuth(adminApp()).getUserByEmail(email).catch(() => null);
-  if (!user) return undefined;
-  const doc = await adminDb().collection('admins').doc(user.uid).get();
-  return doc.exists ? (doc.data()!.role as string) : undefined;
+  const { data } = await adminDb()
+    .from('admins').select('role').eq('email', email.toLowerCase()).maybeSingle();
+  return (data?.role as string | undefined) ?? undefined;
 }

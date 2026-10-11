@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import {
-  TOUR_IDS, adminDb, dayAfter, expectLogos, fillRegistrationForm, getReg, getTour, mailsTo,
+  TOUR_IDS, adminDb, dayAfter, expectLogos, fillRegistrationForm, getReg, getTour, mailFor, mailsTo,
   nationalityBox, patchTour, registerVisitor, registrationBody, signIn, testEmail,
   testPassport, waitForAudit,
 } from './helpers';
@@ -182,25 +182,25 @@ test.describe('Public registration', () => {
     const mails = await mailsTo(email);
     expect(mails, 'exactly one mail document per registration').toHaveLength(1);
     const mail = mails[0];
-    expect((await getReg(code))?.mailId).toBe(mail.id);
+    expect(mail.regCode).toBe(code);
     expect(mail.to).toBe(email);
-    expect(mail.message.subject).toBe(`Booking confirmed – ${tour.name} – ${code}`);
+    expect(mail.subject!).toBe(`Booking confirmed – ${tour.name} – ${code}`);
 
     // The HTML escapes every value that came from data — this tour's name has an "&".
     const escaped = (v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     expect(tour.name).toContain('&');
-    expect(mail.message.html).not.toContain(tour.name);
-    expect(mail.message.html).toContain(escaped(tour.name));
+    expect(mail.html!).not.toContain(tour.name);
+    expect(mail.html!).toContain(escaped(tour.name));
 
-    expect(mail.message.text).toContain(tour.name);
-    for (const body of [mail.message.text, mail.message.html]) {
+    expect(mail.text!).toContain(tour.name);
+    for (const body of [mail.text!, mail.html!]) {
       expect(body).toContain(code);
       expect(body).toContain(tour.pickupPoint);
       expect(body).toContain(tour.departureTime);
       expect(body).toContain(longDate(date));   // the readable date, not the ISO string
       expect(body).toContain('Arrive 15 minutes before departure');
     }
-    expect(mail.message.html).toContain(`/registered/${code}`);
+    expect(mail.html!).toContain(`/registered/${code}`);
 
     // A script tag in a visitor's name must never survive into the markup.
     const nasty = await page.request.post('/api/register', {
@@ -209,9 +209,10 @@ test.describe('Public registration', () => {
       }),
     });
     expect(nasty.status()).toBe(201);
-    const nastyMail = (await mailsTo((await getReg((await nasty.json()).code))!.email!))[0];
-    expect(nastyMail.message.html).not.toContain('<script>');
-    expect(nastyMail.message.html).toContain('&lt;script&gt;');
+    const nastyCode = (await nasty.json()).code as string;
+    const nastyMail = (await mailFor(nastyCode))!;
+    expect(nastyMail.html!).not.toContain('<script>');
+    expect(nastyMail.html!).toContain('&lt;script&gt;');
   });
 
   test('Resend confirmation queues a second mail doc and writes an audit entry', async ({ page }) => {
@@ -220,7 +221,7 @@ test.describe('Public registration', () => {
     const code = await registerVisitor(page, {
       name: 'Resend Visitor', tourId: TOUR_IDS.kapsarc, email, date: dayAfter(4),
     });
-    const first = (await getReg(code))!.mailId;
+    const first = (await mailFor(code))!.id;
     expect((await mailsTo(email))).toHaveLength(1);
 
     await signIn(page, 'registration');
@@ -233,7 +234,7 @@ test.describe('Public registration', () => {
     await expect.poll(async () => (await mailsTo(email)).length, { timeout: 20_000 }).toBe(2);
 
     // The registration now points at the new document, so the badge follows the resend.
-    const second = (await getReg(code))!.mailId;
+    const second = (await mailFor(code))!.id;
     expect(second).toBeTruthy();
     expect(second).not.toBe(first);
 
@@ -244,7 +245,7 @@ test.describe('Public registration', () => {
     // Both copies are addressed and titled the same way.
     for (const m of await mailsTo(email)) {
       expect(m.to).toBe(email);
-      expect(m.message.subject).toContain(code);
+      expect(m.subject!).toContain(code);
     }
   });
 
@@ -261,8 +262,9 @@ test.describe('Public registration', () => {
     await page.getByRole('button', { name: /Register for this tour/ }).click();
     await expect(page.getByText('Enter a valid email address, like name@example.com.')).toBeVisible();
 
-    expect(await adminDb().collection('registrations').where('email', '==', 'not-an-email').get())
-      .toHaveProperty('empty', true);
+    const { data: none } = await adminDb()
+      .from('registrations').select('code').eq('email', 'not-an-email');
+    expect(none ?? []).toHaveLength(0);
   });
 
   test('a valid registration lands on /registered/[CODE] with the date, and never the passport', async ({ page }) => {
@@ -321,7 +323,7 @@ test.describe('Public registration', () => {
     expect(otherDay.status()).toBe(201);
 
     // After cancelling the first one, that same day is free again.
-    await adminDb().collection('registrations').doc(first).update({ status: 'cancelled' });
+    await adminDb().from('registrations').update({ status: 'cancelled' }).eq('code', first);
     const again = await page.request.post('/api/register', {
       data: registrationBody({ nationality: 'EG', idNumber: passport, tourId: TOUR_IDS.aramco, tourDate: date }),
     });

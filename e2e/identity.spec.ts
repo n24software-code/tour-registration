@@ -175,7 +175,7 @@ test.describe('National ID / passport', () => {
 
     const { mailFor } = await import('./helpers');
     const mail = (await mailFor(code))!;
-    expect(mail.message.text).not.toContain(id);
-    expect(mail.message.html).not.toContain(id);
+    expect(mail.text!).not.toContain(id);
+    expect(mail.html!).not.toContain(id);
   });
 });

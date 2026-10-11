@@ -2,8 +2,7 @@
 import { useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { signOut } from 'firebase/auth';
-import { auth } from '@/lib/firebase';
+import { supabaseBrowser } from '@/lib/supabase/client';
 import { useAuth } from '@/lib/auth';
 import { can, ROLE_LABEL, type Permission } from '@/lib/roles';
 import { Logos } from '@/components/Logos';
@@ -32,7 +31,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           You&rsquo;re signed in as {user.email}, but this account hasn&rsquo;t been given a role.
           Ask the Product Owner to add you on the Team page, then sign in again.
         </p>
-        <button className="btn-ghost mt-6" onClick={() => signOut(auth)}>Sign out</button>
+        <button className="btn-ghost mt-6" onClick={() => { void supabaseBrowser().auth.signOut(); }}>Sign out</button>
       </main>
     );
 
@@ -50,7 +49,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           </Link>
           <div className="ml-auto flex items-center gap-3 text-sm sm:order-last">
             <span className="text-ink/70"><span className="font-medium text-ink">{admin.name}</span> · {ROLE_LABEL[admin.role]}</span>
-            <button className="btn-ghost btn-sm" onClick={() => signOut(auth)}>Sign out</button>
+            <button className="btn-ghost btn-sm" onClick={() => { void supabaseBrowser().auth.signOut(); }}>Sign out</button>
           </div>
           <nav aria-label="Admin" className="-mx-1 flex w-full gap-1 overflow-x-auto sm:w-auto">
             {items.map((n) => (

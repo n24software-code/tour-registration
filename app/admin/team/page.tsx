@@ -35,7 +35,7 @@ export default function TeamPage() {
     try {
       const res = await fetch('/api/admins', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await user!.getIdToken()}` },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
       });
       const data = await res.json().catch(() => ({}));

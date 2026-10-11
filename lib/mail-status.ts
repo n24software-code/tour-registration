@@ -1,59 +1,66 @@
 'use client';
 /**
- * Live view of the Trigger Email extension's delivery state. The extension writes
- * `delivery.state` back onto each `mail/{id}` document; registrations keep the id in
- * `mailId`, which is what links the two.
+ * Live delivery state for each registration's booking confirmation.
  *
- * Nothing here assumes the extension is installed: until it is, documents simply have
- * no `delivery` field and the UI says "Queued".
+ * `registration_mail_status` is a view over email_outbox that keeps only the newest
+ * row per registration, so a resend simply supersedes the previous attempt. RLS limits
+ * it to admins; for anyone else the subscription just stays empty.
  */
 import { useEffect, useState } from 'react';
-import { collection, onSnapshot } from 'firebase/firestore';
-import { db } from './firebase';
-import type { MailState } from './types';
+import { supabaseBrowser } from './supabase/client';
+
+export type OutboxState = 'pending' | 'sent' | 'error';
 
 export interface MailStatus {
-  state: MailState | 'QUEUED';
+  state: OutboxState;
   error?: string | null;
+  attempts: number;
 }
 
-export const MAIL_LABEL: Record<MailStatus['state'], string> = {
-  QUEUED: 'Queued',
-  PENDING: 'Pending',
-  PROCESSING: 'Pending',
-  SUCCESS: 'Sent',
-  ERROR: 'Error',
-  RETRY: 'Pending',
+export const MAIL_LABEL: Record<OutboxState, string> = {
+  pending: 'Pending',
+  sent: 'Sent',
+  error: 'Error',
 };
 
-export const MAIL_STYLE: Record<MailStatus['state'], string> = {
-  QUEUED: 'bg-ink/10 text-ink/70',
-  PENDING: 'bg-sun/25 text-[#6b4409]',
-  PROCESSING: 'bg-sun/25 text-[#6b4409]',
-  SUCCESS: 'bg-palm/15 text-palm',
-  ERROR: 'bg-clay/15 text-clay',
-  RETRY: 'bg-sun/25 text-[#6b4409]',
+export const MAIL_STYLE: Record<OutboxState, string> = {
+  pending: 'bg-sun/25 text-[#6b4409]',
+  sent: 'bg-palm/15 text-palm',
+  error: 'bg-clay/15 text-clay',
 };
 
-/** mailId → delivery state, live. */
+/** registration code → delivery state, live. */
 export function useMailStatuses() {
   const [map, setMap] = useState<Map<string, MailStatus>>(new Map());
-  useEffect(
-    () =>
-      onSnapshot(
-        collection(db, 'mail'),
-        (snap) => {
-          const next = new Map<string, MailStatus>();
-          for (const d of snap.docs) {
-            const delivery = d.data().delivery as { state?: MailState; error?: string } | undefined;
-            next.set(d.id, { state: delivery?.state ?? 'QUEUED', error: delivery?.error ?? null });
-          }
-          setMap(next);
-        },
-        // Reading `mail` is a PO/PM-only privilege; for everyone else this just stays empty.
-        () => setMap(new Map())
-      ),
-    []
-  );
+
+  useEffect(() => {
+    const supabase = supabaseBrowser();
+    let active = true;
+
+    async function sync() {
+      const { data, error } = await supabase
+        .from('registration_mail_status')
+        .select('reg_code, status, error, attempts');
+      if (!active || error) return;
+      setMap(new Map(
+        (data ?? []).map((r) => [
+          String(r.reg_code),
+          { state: r.status as OutboxState, error: r.error, attempts: r.attempts },
+        ])
+      ));
+    }
+
+    void sync();
+    // The view isn't itself replicated, so changes to the underlying table drive it.
+    const channel = supabase
+      .channel('live:email_outbox')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'email_outbox' }, () => {
+        void sync();
+      })
+      .subscribe();
+
+    return () => { active = false; void supabase.removeChannel(channel); };
+  }, []);
+
   return map;
 }

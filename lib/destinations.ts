@@ -39,7 +39,13 @@ export function buildDestinations(tours: Tour[]): Destination[] {
 
   const out: Destination[] = [];
   for (const [id, list] of groups) {
-    const batches = [...list].sort(
+    // Defensive: once a destination runs in batches, an un-batched row for it is stale
+    // data (a half-finished migration, a leftover seed). Showing it would offer a
+    // departure that no longer exists, so it is dropped rather than rendered.
+    const batched = list.filter((t) => t.batch !== null && t.batch !== undefined);
+    const kept = batched.length ? batched : list;
+
+    const batches = [...kept].sort(
       (a, b) => (a.batch ?? 0) - (b.batch ?? 0) || a.departureTime.localeCompare(b.departureTime)
     );
     const head = batches[0];

@@ -47,7 +47,7 @@ test.describe('Registration <-> Crowd in real time', () => {
 
     // Registration confirms.
     const reg = await asRole(browser, 'registration', '/admin/registrations');
-    await regRow(reg.page, code).getByRole('button', { name: 'Confirm' }).click();
+    await regRow(reg.page, code).getByRole('button', { name: 'Confirm', exact: true }).click();
 
     // ...and the visitor appears on Crowd with no reload.
     await expect(crowdCard(crowd.page, code)).toBeVisible({ timeout: 20_000 });
@@ -64,7 +64,7 @@ test.describe('Registration <-> Crowd in real time', () => {
     const code = await registerVisitor(page, { name: 'Boarding Flow', email, tourId: TOUR, date: DATE });
 
     const reg = await asRole(browser, 'registration', '/admin/registrations');
-    await regRow(reg.page, code).getByRole('button', { name: 'Confirm' }).click();
+    await regRow(reg.page, code).getByRole('button', { name: 'Confirm', exact: true }).click();
 
     const crowd = await asRole(browser, 'crowd', '/admin/crowd');
     await selectCrowdTour(crowd.page);
@@ -106,7 +106,7 @@ test.describe('Registration <-> Crowd in real time', () => {
     const code = await registerVisitor(page, { name: 'Undo Paths', email, tourId: TOUR, date: DATE });
 
     const reg = await asRole(browser, 'registration', '/admin/registrations');
-    await regRow(reg.page, code).getByRole('button', { name: 'Confirm' }).click();
+    await regRow(reg.page, code).getByRole('button', { name: 'Confirm', exact: true }).click();
 
     const crowd = await asRole(browser, 'crowd', '/admin/crowd');
     await selectCrowdTour(crowd.page);
@@ -146,8 +146,8 @@ test.describe('Registration <-> Crowd in real time', () => {
     const code = await registerVisitor(page, { name: 'Zzz Flagged', email: testEmail(), tourId: TOUR, date: DATE });
 
     const reg = await asRole(browser, 'registration', '/admin/registrations');
-    await regRow(reg.page, otherCode).getByRole('button', { name: 'Confirm' }).click();
-    await regRow(reg.page, code).getByRole('button', { name: 'Confirm' }).click();
+    await regRow(reg.page, otherCode).getByRole('button', { name: 'Confirm', exact: true }).click();
+    await regRow(reg.page, code).getByRole('button', { name: 'Confirm', exact: true }).click();
 
     const crowd = await asRole(browser, 'crowd', '/admin/crowd');
     await selectCrowdTour(crowd.page);
@@ -193,7 +193,7 @@ test.describe('Registration <-> Crowd in real time', () => {
     const code = await registerVisitor(page, { name: 'Cancel Me', email, tourId: TOUR, date: DATE });
 
     const reg = await asRole(browser, 'registration', '/admin/registrations');
-    await regRow(reg.page, code).getByRole('button', { name: 'Confirm' }).click();
+    await regRow(reg.page, code).getByRole('button', { name: 'Confirm', exact: true }).click();
 
     const crowd = await asRole(browser, 'crowd', '/admin/crowd');
     await selectCrowdTour(crowd.page);
@@ -230,7 +230,7 @@ test.describe('Registration <-> Crowd in real time', () => {
     const pendingBefore = Number(await cell(PENDING).innerText());
 
     const reg = await asRole(browser, 'registration', '/admin/registrations');
-    await regRow(reg.page, code).getByRole('button', { name: 'Confirm' }).click();
+    await regRow(reg.page, code).getByRole('button', { name: 'Confirm', exact: true }).click();
 
     // Pending drops by one, Confirmed rises by one - live.
     await expect.poll(async () => Number(await cell(PENDING).innerText()), { timeout: 20_000 })
@@ -298,7 +298,7 @@ test.describe('Registration <-> Crowd in real time', () => {
     const code = await registerVisitor(page, { name: 'Audit Subject', email: testEmail(), tourId: TOUR, date: DATE });
 
     const reg = await asRole(browser, 'registration', '/admin/registrations');
-    await regRow(reg.page, code).getByRole('button', { name: 'Confirm' }).click();
+    await regRow(reg.page, code).getByRole('button', { name: 'Confirm', exact: true }).click();
     const confirmEntry = await waitForAudit(code, 'status:confirmed');
     expect(confirmEntry.byRole).toBe('registration');
     expect(confirmEntry.byEmail).toBe(CREDS.registration.email);

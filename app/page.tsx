@@ -1,8 +1,8 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { collection, onSnapshot } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { supabaseBrowser } from '@/lib/supabase/client';
+import { toTour, type TourRow } from '@/lib/supabase/types';
 import type { Slot, Tour } from '@/lib/types';
 import { SLOT_LABEL } from '@/lib/types';
 import {
@@ -135,16 +135,32 @@ export default function RegisterPage() {
   // Once the visitor picks a country themselves, the nationality stops overriding it.
   const countryTouched = useRef(false);
 
-  // Live, so seats left stays accurate while the visitor fills in the form.
-  useEffect(
-    () =>
-      onSnapshot(
-        collection(db, 'tours'),
-        (s) => setTours(s.docs.map((d) => ({ ...d.data(), id: d.id }) as Tour).sort((a, b) => a.order - b.order)),
-        () => setLoadError('Tours could not be loaded. Check your connection and reload the page.')
-      ),
-    []
-  );
+  // Live, so seats left stays accurate while the visitor fills in the form. Tours are
+  // world-readable, so this works for an anonymous visitor.
+  useEffect(() => {
+    const supabase = supabaseBrowser();
+    let active = true;
+
+    async function load() {
+      const { data, error } = await supabase.from('tours').select('*');
+      if (!active) return;
+      if (error) {
+        setLoadError('Tours could not be loaded. Check your connection and reload the page.');
+        return;
+      }
+      setLoadError('');
+      setTours((data as TourRow[]).map(toTour).sort((a, b) => a.order - b.order));
+    }
+
+    void load();
+
+    const channel = supabase
+      .channel('public:tours')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tours' }, () => { void load(); })
+      .subscribe((status) => { if (status === 'SUBSCRIBED') void load(); });
+
+    return () => { active = false; void supabase.removeChannel(channel); };
+  }, []);
 
   const chosen = tours?.find((t) => t.id === form.tourId);
   const destinations = useMemo(() => buildDestinations(tours ?? []), [tours]);

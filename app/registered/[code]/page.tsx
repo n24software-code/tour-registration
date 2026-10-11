@@ -1,7 +1,8 @@
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import type { Metadata } from 'next';
-import { adminDb } from '@/lib/firebase-admin';
+import { supabaseAdmin } from '@/lib/supabase/admin';
+import { hhmm } from '@/lib/supabase/types';
 import { SlotMark, formatDate } from '@/components/ui';
 import { LogoBand } from '@/components/Logos';
 import { TourNotices } from '@/components/TourNotices';
@@ -14,20 +15,23 @@ export default async function RegisteredPage({ params }: { params: { code: strin
   const code = params.code.toUpperCase();
   if (!/^[A-Z2-9]{6}$/.test(code)) notFound();
 
-  const db = adminDb();
-  const snap = await db.collection('registrations').doc(code).get();
-  if (!snap.exists) notFound();
-  const reg = snap.data()!;
-  const tour = (await db.collection('tours').doc(reg.tourId).get()).data();
+  // The secret key reads this: the page is public, but row level security gives the
+  // anonymous key no access to registrations at all.
+  const db = supabaseAdmin();
+  const { data: reg } = await db
+    .from('registrations').select('*').eq('code', code).maybeSingle();
+  if (!reg) notFound();
+  const { data: tour } = await db
+    .from('tours').select('*').eq('id', reg.tour_id).maybeSingle();
   const firstName = String(reg.name).split(' ')[0]; // public URL: show the first name only
   const slot = reg.slot as Slot;
   // This page is reachable by anyone with the code, so it never shows the ID number.
-  const date: string = reg.tourDate || tour?.date || '';
-  const departureTime: string = reg.departureTime || tour?.departureTime || '';
+  const date: string = reg.tour_date || tour?.tour_date || '';
+  const departureTime: string = hhmm(reg.departure_time) || hhmm(tour?.departure_time);
   const batch: number | null = reg.batch ?? tour?.batch ?? null;
   const trip = {
-    experienceDuration: tour?.experienceDuration as string | undefined,
-    notices: tour?.notices as string[] | undefined,
+    experienceDuration: tour?.experience_duration ?? undefined,
+    notices: tour?.notices ?? undefined,
   };
 
   return (
@@ -37,7 +41,7 @@ export default async function RegisteredPage({ params }: { params: { code: strin
         <p className="flex items-center gap-2 text-ink/75">
           <SlotMark slot={slot} /> You&rsquo;re registered, {firstName}.
         </p>
-        <h1 className="mt-3 text-3xl font-semibold">{reg.tourName}</h1>
+        <h1 className="mt-3 text-3xl font-semibold">{reg.tour_name}</h1>
         {batch && (
           <p className="mt-1 text-ink/75">Batch {batch} · departs {departureTime}</p>
         )}
@@ -53,7 +57,7 @@ export default async function RegisteredPage({ params }: { params: { code: strin
           <dt className="text-ink/70">Date</dt>
           <dd className="font-medium">{date ? formatDate(date) : 'To be confirmed'}</dd>
           {tour && <>
-            <dt className="text-ink/70">Pickup point</dt><dd className="font-medium">{tour.pickupPoint}</dd>
+            <dt className="text-ink/70">Pickup point</dt><dd className="font-medium">{tour.pickup_point}</dd>
           </>}
           {departureTime && <>
             <dt className="text-ink/70">Bus leaves</dt><dd className="font-medium">{departureTime}</dd>

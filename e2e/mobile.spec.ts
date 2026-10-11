@@ -60,7 +60,7 @@ test.describe('Crowd page on a phone (390x844)', () => {
     const code = await registerVisitor(page, { name: 'Phone Flow', email: testEmail(), tourId: TOUR, date: DATE });
 
     const reg = await asRole(browser, 'registration', '/admin/registrations');
-    await reg.page.locator('tr', { hasText: code }).getByRole('button', { name: 'Confirm' }).click();
+    await reg.page.locator('tr', { hasText: code }).getByRole('button', { name: 'Confirm', exact: true }).click();
 
     const crowd = await asRole(browser, 'crowd', '/admin/crowd');
     await crowd.page.getByLabel('Trip').selectOption(TRIP);
@@ -92,7 +92,7 @@ test.describe('Crowd page on a phone (390x844)', () => {
 
     const reg = await asRole(browser, 'registration', '/admin/registrations');
     for (const code of [a, b]) {
-      await reg.page.locator('tr', { hasText: code }).getByRole('button', { name: 'Confirm' }).click();
+      await reg.page.locator('tr', { hasText: code }).getByRole('button', { name: 'Confirm', exact: true }).click();
     }
 
     const crowd = await asRole(browser, 'crowd', '/admin/crowd');

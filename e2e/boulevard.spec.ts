@@ -125,7 +125,7 @@ test.describe('Boulevard City trip information', () => {
     // Email.
     const mail = (await mailFor(code))!;
     expect(mail).toBeTruthy();
-    for (const body of [mail.message.text, mail.message.html]) {
+    for (const body of [mail.text!, mail.html!]) {
       expect(body).toContain(BOULEVARD_DURATION);
       for (const notice of BOULEVARD_NOTICES) expect(body).toContain(notice);
     }
@@ -144,7 +144,7 @@ test.describe('Boulevard City trip information', () => {
     await expect(section.filter({ hasText: BOULEVARD_DURATION }).first()).toBeVisible();
 
     // Crowd sees it too, once the visitor is confirmed.
-    await page.locator('tr', { hasText: code }).getByRole('button', { name: 'Confirm' }).click();
+    await page.locator('tr', { hasText: code }).getByRole('button', { name: 'Confirm', exact: true }).click();
     await expect.poll(async () => (await getReg(code))?.status, { timeout: 20_000 }).toBe('confirmed');
     await page.getByRole('button', { name: 'Sign out' }).click();
 

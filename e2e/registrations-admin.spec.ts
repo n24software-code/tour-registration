@@ -4,11 +4,8 @@
  * Product Owner — can delete a registration outright.
  */
 import { expect, test, type Page } from '@playwright/test';
-import { deleteApp, initializeApp, type FirebaseApp } from 'firebase/app';
-import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
-import { deleteDoc, doc, getFirestore } from 'firebase/firestore';
 import {
-  CREDS, TOUR_IDS, adminDb, auditFor, dayAfter, getReg, getTour, patchTour,
+  TOUR_IDS, adminDb, auditFor, clientAs, dayAfter, getReg, getTour, patchTour,
   registerVisitor, signIn, testPassport, waitForAudit, type Role,
 } from './helpers';
 
@@ -64,7 +61,7 @@ test.describe('Registrations: grouped sections', () => {
     )).toBeVisible();
 
     // Confirming one moves it between the counters, live.
-    await first.locator('tr', { hasText: a }).getByRole('button', { name: 'Confirm' }).click();
+    await first.locator('tr', { hasText: a }).getByRole('button', { name: 'Confirm', exact: true }).click();
     await expect(first.getByText(/^Pending 1$/)).toBeVisible({ timeout: 20_000 });
     await expect(first.getByText(/^Confirmed 1$/)).toBeVisible();
   });
@@ -133,11 +130,13 @@ test.describe('Registrations: grouped sections', () => {
 
     // A registration written before these fields existed must not break the page.
     const legacy = 'ZZL999';
-    await adminDb().collection('registrations').doc(legacy).set({
-      name: 'Legacy Visitor', email: `e2e+legacy${Date.now()}@tour.test`, phone: '0501234567',
-      tourId: TOUR, tourName: (await getTour(TOUR)).name, slot: 'morning',
-      status: 'pending', busNumber: null, flag: null,
-      createdAt: new Date(), updatedAt: new Date(), updatedBy: 'visitor',
+    await adminDb().from('registrations').insert({
+      code: legacy, name: 'Legacy Visitor', email: `e2e+legacy${Date.now()}@tour.test`,
+      phone: '+966501234567', phone_country: 'SA',
+      // A row from before the ID fields existed: blank, not absent.
+      id_type: 'passport', id_number: '', nationality: '',
+      tour_id: TOUR, tour_name: (await getTour(TOUR)).name, slot: 'morning',
+      tour_date: date, status: 'pending', updated_by: 'visitor',
     });
 
     await signIn(page, 'registration');
@@ -152,10 +151,11 @@ test.describe('Registrations: grouped sections', () => {
     const old = row(page, legacy);
     await expect(old).toBeVisible();
     await expect(old).toContainText('Legacy Visitor');
-    await expect(old.locator('td').nth(2)).toHaveText('—'); // passport
-    await expect(old.locator('td').nth(3)).toHaveText('—'); // nationality
+    // The column also carries a small type tag, so the dash is what matters here.
+    await expect(old.locator('td').nth(2)).toContainText('—'); // no ID number on record
+    await expect(old.locator('td').nth(3)).toHaveText('—');    // no nationality
 
-    await adminDb().collection('registrations').doc(legacy).delete();
+    await adminDb().from('registrations').delete().eq('code', legacy);
   });
 
   test('the Crowd team picks a specific trip, and can search by passport', async ({ page }) => {
@@ -172,7 +172,7 @@ test.describe('Registrations: grouped sections', () => {
     await signIn(page, 'registration');
     await page.goto('/admin/registrations');
     for (const code of [here, elsewhere]) {
-      await row(page, code).getByRole('button', { name: 'Confirm' }).click();
+      await row(page, code).getByRole('button', { name: 'Confirm', exact: true }).click();
     }
     // Wait for both writes to land before signing out, or they die with the auth session.
     for (const code of [here, elsewhere]) {
@@ -212,7 +212,7 @@ test.describe('Registrations: delete', () => {
     const target = row(page, code);
     await expect(target).toBeVisible({ timeout: 20_000 });
 
-    await target.getByRole('button', { name: 'Delete' }).click();
+    await target.getByRole('button', { name: 'Delete', exact: true }).click();
 
     // A real modal, naming everything the PO needs to check.
     const dialog = page.getByRole('dialog');
@@ -254,7 +254,7 @@ test.describe('Registrations: delete', () => {
     await expect.poll(async () => (await getTour(TOUR)).registeredCount, { timeout: 20_000 })
       .toBe(taken - 1);
 
-    await target.getByRole('button', { name: 'Delete' }).click();
+    await target.getByRole('button', { name: 'Delete', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Delete registration' }).click();
     await expect(target).toHaveCount(0, { timeout: 20_000 });
     await waitForAudit(code, 'registration:delete');
@@ -272,7 +272,7 @@ test.describe('Registrations: delete', () => {
     const target = row(page, code);
     await expect(target).toBeVisible({ timeout: 20_000 });
 
-    await target.getByRole('button', { name: 'Delete' }).click();
+    await target.getByRole('button', { name: 'Delete', exact: true }).click();
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
     await dialog.getByRole('button', { name: 'Keep it' }).click();
@@ -292,7 +292,7 @@ test.describe('Registrations: delete', () => {
     const target = row(page, code);
     await expect(target).toBeVisible({ timeout: 20_000 });
 
-    const trigger = target.getByRole('button', { name: 'Delete' });
+    const trigger = target.getByRole('button', { name: 'Delete', exact: true });
     await trigger.click();
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
@@ -324,9 +324,9 @@ test.describe('Registrations: delete', () => {
       await page.goto('/admin/registrations');
       const target = row(page, code);
       await expect(target).toBeVisible({ timeout: 20_000 });
-      await expect(target.getByRole('button', { name: 'Delete' })).toHaveCount(0);
+      await expect(target.getByRole('button', { name: 'Delete', exact: true })).toHaveCount(0);
       // ...but the actions they DO have are still there.
-      await expect(target.getByRole('button', { name: 'Confirm' })).toBeVisible();
+      await expect(target.getByRole('button', { name: 'Confirm', exact: true })).toBeVisible();
     });
   }
 
@@ -337,24 +337,19 @@ test.describe('Registrations: delete', () => {
   });
 
   for (const role of ['pm', 'registration', 'crowd'] as Role[]) {
-    test(`Firestore refuses a direct delete by ${role}`, async ({ page }) => {
+    test(`the database refuses a direct delete by ${role}`, async ({ page }) => {
       const code = await registerVisitor(page, { name: `Rules Delete ${role}`, tourId: TOUR });
+      const client = await clientAs(role);
 
-      const app: FirebaseApp = initializeApp({
-        apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY!,
-        authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN!,
-        projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID!,
-        storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET!,
-        messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID!,
-        appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID!,
-      }, `delete-${role}-${Date.now()}`);
-      await signInWithEmailAndPassword(getAuth(app), CREDS[role].email, CREDS[role].password);
+      // No delete policy exists on registrations, so the row simply stays put.
+      await client.from('registrations').delete().eq('code', code);
+      expect(await getReg(code), 'the registration must survive').toBeTruthy();
 
-      await expect(deleteDoc(doc(getFirestore(app), 'registrations', code)))
-        .rejects.toThrow(/permission|insufficient/i);
-      expect(await getReg(code)).toBeTruthy(); // still there
+      // And the RPC refuses anyone but the PO.
+      const { error } = await client.rpc('delete_registration', { p_code: code });
+      expect(error, `${role} must not delete`).not.toBeNull();
+      expect(await getReg(code)).toBeTruthy();
 
-      await deleteApp(app);
       // No audit entry was forged either.
       expect((await auditFor(code)).some((e) => e.action === 'registration:delete')).toBe(false);
     });

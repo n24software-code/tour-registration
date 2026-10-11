@@ -123,6 +123,9 @@ function TourRow({ tour, admin, run, busy }: {
   useEffect(() => { if (!dirty) setT(JSON.parse(key)); }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const id = (f: string) => `${tour.id}-${f}`;
+  // Two batches of one destination share a name, so the accessible labels have to
+  // name the batch as well or they are ambiguous for everyone, not just the tests.
+  const who = tour.batch ? `${tour.name} Batch ${tour.batch}` : tour.name;
   const tooLow = t.capacity < tour.registeredCount;
 
   return (
@@ -134,19 +137,19 @@ function TourRow({ tour, admin, run, busy }: {
         </span>
       </td>
       <td className="cell">
-        <label htmlFor={id('pickup')} className="sr-only">Pickup point for {tour.name}</label>
+        <label htmlFor={id('pickup')} className="sr-only">Pickup point for {who}</label>
         <input id={id('pickup')} className="input" value={t.pickupPoint} onChange={(e) => setT({ ...t, pickupPoint: e.target.value })} />
       </td>
       <td className="cell">
-        <label htmlFor={id('date')} className="sr-only">Date for {tour.name}</label>
+        <label htmlFor={id('date')} className="sr-only">Date for {who}</label>
         <input id={id('date')} type="date" className="input" value={t.date} onChange={(e) => setT({ ...t, date: e.target.value })} />
       </td>
       <td className="cell">
-        <label htmlFor={id('time')} className="sr-only">Departure time for {tour.name}</label>
+        <label htmlFor={id('time')} className="sr-only">Departure time for {who}</label>
         <input id={id('time')} type="time" className="input" value={t.departureTime} onChange={(e) => setT({ ...t, departureTime: e.target.value })} />
       </td>
       <td className="cell whitespace-nowrap">
-        <label htmlFor={id('cap')} className="sr-only">Capacity for {tour.name}</label>
+        <label htmlFor={id('cap')} className="sr-only">Capacity for {who}</label>
         <input id={id('cap')} type="number" min={Math.max(1, tour.registeredCount)} className="input w-24" value={t.capacity}
           aria-invalid={tooLow} onChange={(e) => setT({ ...t, capacity: Number(e.target.value) })} />
         <div className={`mt-1 text-xs ${tooLow ? 'text-clay' : 'text-ink/70'}`}>
@@ -155,14 +158,14 @@ function TourRow({ tour, admin, run, busy }: {
       </td>
       <td className="cell">
         <RestrictedPicker
-          id={id('restricted')} label={`Restricted nationalities for ${tour.name}`}
+          id={id('restricted')} label={`Restricted nationalities for ${who}`}
           value={t.restrictedNationalities}
           onChange={(codes) => setT({ ...t, restrictedNationalities: codes })}
         />
       </td>
       <td className="cell">
         <TripInfoEditor
-          idFor={id} label={tour.name}
+          idFor={id} label={who}
           duration={t.experienceDuration} notices={t.notices}
           onChange={(patch) => setT({ ...t, ...patch })}
         />

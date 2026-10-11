@@ -131,8 +131,8 @@ test.describe('Batches', () => {
     // Email.
     const { mailFor } = await import('./helpers');
     const mail = (await mailFor(code))!;
-    expect(mail.message.subject).toContain('Batch 2');
-    for (const body of [mail.message.text, mail.message.html]) {
+    expect(mail.subject!).toContain('Batch 2');
+    for (const body of [mail.text!, mail.html!]) {
       expect(body).toContain('09:00');
       expect(body).toMatch(/Batch.{0,20}2/s);
     }
@@ -175,8 +175,10 @@ test.describe('Batches', () => {
     await signIn(page, 'registration');
     await page.goto('/admin/registrations');
 
-    const section = page.locator('section').filter({ hasText: 'SABIC - Home of Innovation – Batch 2' });
+    // Scope to this exact trip: other dates for the same batch are also on the page.
+    const section = page.locator(`section[data-trip="${b2.id}|${date}|${tour.departureTime}"]`);
     await expect(section).toBeVisible({ timeout: 20_000 });
+    await expect(section).toContainText('SABIC - Home of Innovation – Batch 2');
     await expect(section).toContainText('09:00');
     await expect(section.locator('tr', { hasText: code })).toHaveCount(1);
 
