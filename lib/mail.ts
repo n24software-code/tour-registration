@@ -1,7 +1,7 @@
 /**
- * The booking confirmation email, as a document for the Trigger Email from Firestore
- * extension (collection `mail`). Both bodies are built here so the plain-text and HTML
- * versions can never drift apart.
+ * The booking confirmation email, written to the `mail` collection and delivered by the
+ * sendBookingConfirmation Cloud Function (functions/src). Both bodies are built here so
+ * the plain-text and HTML versions can never drift apart.
  *
  * Every value that came from a visitor is escaped before it reaches the HTML.
  */
@@ -9,6 +9,8 @@ import { formatDate } from './format';
 
 export interface MailTrip {
   tourName: string;
+  /** Which departure of the destination, when the tour runs in batches. */
+  batch?: number | null;
   tourDate: string;
   departureTime: string;
   pickupPoint: string;
@@ -41,17 +43,19 @@ const LOGOS = [
   { file: 'logo3.png', alt: 'Ministry of Energy' },
 ];
 
-export const mailSubject = (t: { tourName: string; code: string }) =>
-  `Booking confirmed – ${t.tourName} – ${t.code}`;
+/** "Booking confirmed – SABIC - Home of Innovation – Batch 1 – K7QM2P" */
+export const mailSubject = (t: { tourName: string; batch?: number | null; code: string }) =>
+  `Booking confirmed – ${t.tourName}${t.batch ? ` – Batch ${t.batch}` : ''} – ${t.code}`;
 
 export function mailText(m: MailInput) {
   const link = `${siteUrl()}/registered/${m.code}`;
   const lines = [
     `Hi ${m.name.split(' ')[0]},`,
     '',
-    `Your booking for ${m.tourName} is confirmed.`,
+    `Your booking for ${m.tourName}${m.batch ? ` – Batch ${m.batch}` : ''} is confirmed.`,
     '',
     `Your code: ${m.code}`,
+    ...(m.batch ? [`Batch: ${m.batch}`] : []),
     `Date: ${formatDate(m.tourDate) || 'To be confirmed'}`,
     `Departure time: ${m.departureTime}`,
     `Pickup point: ${m.pickupPoint}`,
@@ -119,6 +123,7 @@ export function mailHtml(m: MailInput) {
 
           <table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:22px;">
             ${row('Tour', m.tourName)}
+            ${m.batch ? row('Batch', String(m.batch)) : ''}
             ${row('Date', formatDate(m.tourDate) || 'To be confirmed')}
             ${row('Departure time', m.departureTime)}
             ${row('Pickup point', m.pickupPoint)}
@@ -143,8 +148,8 @@ export function mailHtml(m: MailInput) {
 }
 
 /**
- * The full `mail/{id}` document. `from` is left to the extension's default unless
- * MAIL_FROM is set, so a deployment can override the sender without a code change.
+ * The full `mail/{id}` document. `from` is left out unless MAIL_FROM is set here, in
+ * which case it overrides the function's own MAIL_FROM parameter for this one message.
  */
 export function buildMailDoc(m: MailInput) {
   const from = process.env.MAIL_FROM;

@@ -1,0 +1,29 @@
+{
+  "name": "tour-registration-functions",
+  "private": true,
+  "description": "Cloud Functions for the tour registration system: delivers booking confirmations.",
+  "main": "lib/src/index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "test": "npm run build && node --test lib/test/*.test.js",
+    "serve": "npm run build && firebase emulators:start --only functions,firestore",
+    "logs": "firebase functions:log"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.10.0",
+    "firebase-functions": "^6.1.0",
+    "nodemailer": "^6.9.16"
+  },
+  "devDependencies": {
+    "@types/mailparser": "^3.4.5",
+    "@types/nodemailer": "^6.4.17",
+    "@types/smtp-server": "^3.5.13",
+    "mailparser": "^3.7.2",
+    "smtp-server": "^3.13.6",
+    "typescript": "^5.6.2"
+  }
+}

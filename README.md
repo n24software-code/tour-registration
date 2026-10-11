@@ -54,8 +54,8 @@ listener, so both teams see each other's changes instantly without refreshing.
    Keep transparency by encoding with `png({ compressionLevel: 9 })` — **not** `palette: true`, which
    flattens the alpha channel.
 8. **Booking confirmation emails.** `NEXT_PUBLIC_SITE_URL` and `MAIL_FROM` go in `.env.local`
-   (see `.env.example`), and the **Trigger Email from Firestore** extension does the sending —
-   see [Confirmation emails](#confirmation-emails) below for the one-time setup.
+   (see `.env.example`), and a Cloud Function delivers them over SMTP — see
+   [Confirmation emails](#confirmation-emails) below for the one-time setup. Needs Blaze.
 9. **Run:** `npm run dev`. Visitors use `/`, and staff sign in at `/login`. The PO adds the rest of the team under **Team**.
 
 Edit pickup points, dates, times, capacity, nationality restrictions and trip information on the
@@ -125,52 +125,112 @@ behaves the same way.
 
 ## Confirmation emails
 
-Every successful registration writes a `mail/{id}` document **inside the same transaction** as the
-registration, so neither can exist without the other. Delivery is then the
-[Trigger Email from Firestore](https://extensions.dev/extensions/firebase/firestore-send-email)
-extension's job — the app never talks to an SMTP server, and a delivery failure later cannot fail a
-booking. The registration keeps the document id in `mailId`, and the Registrations page shows the
-state the extension writes back to `delivery.state` as **Sent / Pending / Error** beside the address.
+Every successful registration writes a `mail/{id}` document **inside the same transaction**
+as the registration, so neither can exist without the other. A Cloud Function then
+delivers it over SMTP with Nodemailer and writes the result back onto the document.
 
-`lib/mail.ts` builds both bodies from one place: a plain-text part and an inline-styled, accessible
-HTML part with the logos as absolute URLs under `NEXT_PUBLIC_SITE_URL`. Every visitor-supplied value is
-escaped. The message carries the first name, the code in large print, tour, date, departure time,
-pickup point, *"Arrive 15 minutes before departure"*, the tour's duration and notices when it has them,
-and a link to `/registered/<code>`. Subject: `Booking confirmed – <Tour> – <CODE>`.
+```
+POST /api/register ──transaction──► registrations/{CODE}  (mailId: "abc")
+                                  └► mail/abc            (to, message.subject/text/html)
+                                           │
+                            onDocumentCreated("mail/{mailId}")
+                                           ▼
+                        functions/src/index.ts → nodemailer → SMTP
+                                           │
+                     mail/abc.delivery = { state, attempts, error, info }
+                                           ▼
+                     Registrations page badge: Sent / Pending / Error
+```
 
-| Variable | Purpose |
-|----------|---------|
-| `NEXT_PUBLIC_SITE_URL` | Absolute origin for the logo images and the booking link. No trailing slash. |
-| `MAIL_FROM` | The From address. Omit to use the extension's own default sender. |
+This replaces the Trigger Email from Firestore extension; the document shape is
+identical, so the badge needed no change and either could be swapped back in.
 
-### Installing the extension (one time, needs the Blaze plan)
+| Piece | Where |
+|---|---|
+| The message (subject, text, escaped HTML) | `lib/mail.ts` — one builder, so the two bodies can't drift |
+| The transaction that queues it | `app/api/register/route.ts` |
+| Delivery | `functions/src/index.ts` (trigger) + `functions/src/send.ts` (state machine) |
+| SMTP settings | Firebase params + one secret — never source code |
+| Live delivery state | `lib/mail-status.ts`, read from `mail/{id}.delivery.state` |
 
-1. **Upgrade the project to Blaze.** Extensions run on Cloud Functions, which the free plan doesn't cover.
-2. **Choose an SMTP provider** and get its credentials:
-   - *Google Workspace* (for an `@n24.sa` sender) — create a dedicated user, turn on 2-step
-     verification, generate an **App Password**, and use `smtps://USER%40n24.sa@smtp.gmail.com:465`.
-     Simple, but subject to Workspace's daily send limits.
-   - *SendGrid* — `smtps://apikey@smtp.sendgrid.net:465`, password = the API key.
-   - *Resend* — `smtps://resend@smtp.resend.com:465`, password = the API key.
-3. **Install it:** `npx firebase-tools ext:install firebase/firestore-send-email --project tour-registration-1727d`
-   and answer:
-   | Setting | Value |
-   |---------|-------|
-   | Email documents collection | `mail` |
-   | Default FROM address | the same address as `MAIL_FROM` |
-   | SMTP connection URI | from step 2 |
-   | SMTP password | the app password or API key (stored in Secret Manager) |
-   | Users/templates collections | leave empty |
-4. **Authenticate the domain** with the provider so mail isn't filtered: add its **SPF** include and
-   **DKIM** CNAME records to the `n24.sa` DNS zone, and a `DMARC` record if there isn't one. Google
-   Workspace senders already have SPF/DKIM if the domain is set up for mail.
-5. **Authorized domains:** add the production host under Authentication → Settings → Authorized domains,
-   and set `NEXT_PUBLIC_SITE_URL` to the same origin so the links in the email resolve.
-6. **Check it:** register once and watch `delivery.state` on the new `mail` document go
-   `PENDING → PROCESSING → SUCCESS`. The Registrations page shows the same thing.
+**Idempotency and retries.** Cloud Functions guarantees *at-least-once* delivery, so
+`deliverMail()` claims a document by moving it to `PROCESSING` before it does anything
+slow, and skips anything already `SUCCESS` or `PROCESSING` — that is what stops a retry
+sending a second copy. A transient failure (connection fault, SMTP 4xx) records `RETRY`
+and throws so Eventarc redelivers; a permanent one (SMTP 5xx, no recipient) records
+`ERROR` and stops. The attempt counter lives on the document and caps at **3**.
 
-Until the extension is installed the documents simply accumulate, the UI shows **Queued**, and
-registration is unaffected.
+**Resend.** PO, PM and Registration get a **Resend confirmation** button on each row
+(`resendConfirmation` in `lib/roles.ts`). It writes a *new* mail document rather than
+resetting the old one — the delivery history stays intact, the function has something
+fresh to pick up, and the registration's `mailId` moves to the new document so the badge
+follows it. Every resend writes an `auditLogs` entry (`registration:resend`).
+
+### SMTP configuration
+
+Nothing sensitive is in the repo. The password is a Secret Manager secret; everything
+else is a Firebase parameter read from `functions/.env.<project-id>` (gitignored —
+`functions/.env.example` is the template).
+
+| Name | Kind | Example |
+|------|------|---------|
+| `SMTP_PASS` | **secret** | the Workspace app password / API key |
+| `SMTP_HOST` | param | `smtp.gmail.com` |
+| `SMTP_PORT` | param | `465` (implicit TLS; 587 would use STARTTLS) |
+| `SMTP_USER` | param | `tours@n24.sa` |
+| `MAIL_FROM` | param | `Tour Registration <tours@n24.sa>` |
+| `FUNCTION_REGION` | param | `me-central2` |
+| `FIRESTORE_DATABASE` | param | `(default)` |
+
+Set the secret yourself — it must never be pasted into a chat, a file or a commit:
+
+```
+npx firebase-tools functions:secrets:set SMTP_PASS --project tour-registration-1727d
+```
+
+**Recommended provider: Google Workspace** for an `@n24.sa` sender. Create a dedicated
+mailbox (e.g. `tours@n24.sa`), turn on 2-step verification, generate an **App Password**
+and use that as `SMTP_PASS` with `smtp.gmail.com:465`. Watch the Workspace daily send
+limit if volumes grow. Alternatives: **SendGrid** (`smtp.sendgrid.net:465`, user
+`apikey`) or **Resend** (`smtp.resend.com:465`, user `resend`) — both with the API key
+as the password.
+
+**Deliverability.** Add the provider's **SPF** include and **DKIM** CNAME records to the
+`n24.sa` DNS zone, and a **DMARC** record if there isn't one, or confirmations will land
+in spam. Set `NEXT_PUBLIC_SITE_URL` to the production origin so the logos and the
+booking link in the email resolve.
+
+### Region
+
+Firestore for this project is in **me-central2** (Dammam), and a v2 Firestore trigger has
+to run where Eventarc can deliver events for that database. `FUNCTION_REGION` therefore
+defaults to `me-central2`. If a deploy is refused because the region can't host the
+trigger, set `FUNCTION_REGION` in `functions/.env.<project-id>` to the nearest supported
+region (try `me-central1`, then `europe-west1`) and redeploy — no code change needed.
+
+### Deploying and troubleshooting
+
+```
+cd functions && npm install && npm run build && cd ..
+npx firebase-tools deploy --only functions,firestore:rules,firestore:indexes \
+  --project tour-registration-1727d
+```
+
+Cloud Functions need the **Blaze** plan. On Spark the deploy fails with the Cloud
+Functions API disabled; see the production checklist.
+
+| Symptom | Where to look |
+|---|---|
+| Badge stuck on **Queued** | The function isn't deployed, or isn't triggering: `npx firebase-tools functions:log --only sendBookingConfirmation` |
+| Badge shows **Error** | `mail/{id}.delivery.error` has the SMTP message verbatim |
+| *SMTP is not configured* | `SMTP_HOST`/`SMTP_USER` params missing, or the `SMTP_PASS` secret was never set |
+| Nothing arrives, state is **Sent** | Delivered but filtered — check SPF/DKIM/DMARC and the provider's own log |
+
+Run the function's own tests (a real SMTP server on localhost, no external service):
+
+```
+npm --prefix functions test
+```
 
 ## Nationality restrictions (the SABIC rule)
 
@@ -193,6 +253,57 @@ per trip (sorted by date, then time, then tour order) with live counts and its o
 running the 08:00 bus never sees tomorrow's passengers. Flagged rows stay highlighted and sort to the top
 of their section, and the search and tour/status filters work across every section (empty ones are hidden
 while filtering).
+
+### Batches
+
+SABIC and Saudi Aramco each run two departures:
+
+| Destination | Batch 1 | Batch 2 | Seats per batch |
+|---|---|---|---|
+| SABIC - Home of Innovation | **08:00** | **09:00** | 20 |
+| Saudi Aramco - KAFD | **09:00** | **10:00** | 10 |
+
+**Each batch is its own tour document**, so capacity, `registeredCount`, the Crowd list
+and the Excel export all work per batch with no special cases. Two fields tie them
+together:
+
+- `destinationId` — shared by the batches of one destination (`"sabic"`, `"aramco-kafd"`).
+- `batch` — `1`, `2`, …; `null` for a tour that runs once.
+
+The public form groups by `destinationId` (`lib/destinations.ts`): the destination is
+shown once, with a required **Choose a departure** radio listing each batch as
+*"Batch 1 · 08:00 · 7 seats left"*. A full or closed batch is disabled; when every batch
+is gone the destination reads **"Full – choose another tour"**. The SABIC nationality
+restriction lives on both batch documents and disables the whole destination.
+
+Capacity is still enforced where it always was — in the `/api/register` transaction,
+against that batch's own document. A Firestore transaction re-checks what it read before
+committing, so three people going for the last seat produce exactly one booking and two
+"This tour is full" refusals.
+
+Everywhere a trip is named, a batch is spelled out: **"<Tour> – Batch N – HH:mm"** in the
+Registrations sections, Overview, the Crowd trip picker, the Excel sheet title and its
+**Batch** column, the confirmation page and the email subject. The Tours page groups
+batches under their destination and has an **Add batch** button that pre-fills the next
+one.
+
+#### Migrating an existing database
+
+```
+npm run migrate:batches -- --dry    # show the plan, write nothing
+npm run migrate:batches             # apply it
+```
+
+Batch 1 keeps the existing document (`sabic-home-of-innovation`, `aramco-kafd`) so
+registrations already attached stay attached; only its time, capacity and batch number
+change. Batch 2 is created as `…-b2`, inheriting name, slot, pickup point, date, active
+flag, notices, duration and the nationality restriction. The denormalised
+`departureTime`/`batch` on batch-1 registrations is refreshed, and the script reports how
+many changed. It is idempotent.
+
+**If a tour already has more registrations than its new capacity the script writes
+nothing and stops with the numbers**, because quietly lowering capacity under people who
+are already booked would overbook the bus.
 
 ### Participant counts
 
@@ -285,11 +396,11 @@ until someone presses **Mark resolved**.
 
 | Collection            | Fields                                                                                                     |
 |-----------------------|------------------------------------------------------------------------------------------------------------|
-| `tours/{id}`          | name, slot (`morning`/`evening`), pickupPoint, departureTime (`"08:00"`), date (`"YYYY-MM-DD"` or `""`), capacity, registeredCount, active, order, restrictedNationalities (ISO alpha-2 codes that may not join; `[]` for none), experienceDuration (`""` for none), notices (`[]` for none) |
-| `registrations/{CODE}`| The 6-character code is the doc ID. name, email (lowercase), phone (E.164), phoneCountry (ISO2), idType (`national_id`/`passport`), idNumber, nationality (ISO alpha-2), tourId, tourName, slot, tourDate (`"YYYY-MM-DD"`), departureTime, status, busNumber, flag, conditionsAcceptedAt, mailId, createdAt, updatedAt, updatedBy, checkedInAt, boardedAt |
+| `tours/{id}`          | name, destinationId (shared by the batches of one destination), batch (`1`, `2`, … or `null`), slot (`morning`/`evening`), pickupPoint, departureTime (`"08:00"`), date (`"YYYY-MM-DD"` or `""`), capacity, registeredCount, active, order, restrictedNationalities (ISO alpha-2 codes that may not join; `[]` for none), experienceDuration (`""` for none), notices (`[]` for none) |
+| `registrations/{CODE}`| The 6-character code is the doc ID. name, email (lowercase), phone (E.164), phoneCountry (ISO2), idType (`national_id`/`passport`), idNumber, nationality (ISO alpha-2), tourId, tourName, slot, tourDate (`"YYYY-MM-DD"`), departureTime, batch, status, busNumber, flag, conditionsAcceptedAt, mailId, createdAt, updatedAt, updatedBy, checkedInAt, boardedAt |
 | `admins/{uid}`        | email, name, role (`po`/`pm`/`registration`/`crowd`)                                                       |
 | `auditLogs/{id}`      | action, regId, detail, byUid, byEmail, byRole, at. Append-only; PO/PM can read.                          |
-| `mail/{id}`           | Trigger Email extension format (`to`, optional `from`, `message.subject/text/html`). Written by the server only; PO/PM/Registration may read it so the UI can show `delivery.state`. |
+| `mail/{id}`           | `to`, optional `from`, `message.subject/text/html`, and `delivery` (`state`, `attempts`, `startTime`, `endTime`, `error`, `info`) written back by the Cloud Function. Created by the server only; PO/PM/Registration may read it so the UI can show the delivery state. |
 
 Registrations are created **only** by `POST /api/register` (Admin SDK) inside a transaction that checks the
 tour is open, that the visitor's nationality isn't restricted, that the date matches the tour's fixed date,
@@ -339,6 +450,13 @@ components/
 public/logos/               logo1 WPC Energy, logo2 Congress, logo3 Ministry of Energy
 scripts/seed.mjs            tours + first PO
 scripts/migrate.mjs         tour restrictions + Boulevard City info + passport → idType/idNumber
+scripts/migrate-batches.mjs SABIC + Aramco batch split (idempotent, --dry)
+scripts/e2e-cleanup.mjs     undoes an e2e run that was interrupted before teardown
+functions/
+  src/index.ts              onDocumentCreated("mail/{mailId}") → sends the confirmation
+  src/send.ts               delivery state machine (idempotent, bounded retries)
+  src/config.ts             SMTP params + the SMTP_PASS secret
+  test/                     node:test against a real local SMTP server
 firestore.rules, firestore.indexes.json, firebase.json, .firebaserc
 ```
 
@@ -350,8 +468,14 @@ firestore.rules, firestore.indexes.json, firebase.json, .firebaserc
 - [ ] **Environment variables:** add every key from `.env.example` in the hosting dashboard. Store `FIREBASE_PRIVATE_KEY`
       as a secret (App Hosting: `apphosting.yaml` + Cloud Secret Manager).
 - [ ] **Authorized domains:** add the production domain under Authentication → Settings → Authorized domains.
-- [ ] **Confirmation emails:** install the **Trigger Email from Firestore** extension — see
-      [Confirmation emails](#confirmation-emails). Until then the documents queue up and nothing is sent.
+- [ ] **Blaze plan (required).** Cloud Functions, and therefore confirmation emails, need
+      pay-as-you-go billing; the Spark plan also caps Firestore at 50k reads/day, which the
+      e2e suite exhausts. Upgrade under **Firebase console → ⚙ → Usage and billing → Modify
+      plan**, then set a **budget alert** (Google Cloud → Billing → Budgets & alerts) so a
+      runaway loop can't surprise you.
+- [ ] **Confirmation emails:** set the SMTP params and the `SMTP_PASS` secret, then deploy
+      the function — see [Confirmation emails](#confirmation-emails). Until then the mail
+      documents queue up, the badge reads **Queued**, and nothing is sent.
 - [ ] **Rules:** run `npx firebase-tools deploy --only firestore` again after any change to `firestore.rules`.
 - [ ] **Backups:** enable Firestore point-in-time recovery or scheduled exports.
 - [ ] **Accounts:** ask every team member to change their temporary password (via "forgot password" or the Firebase console).

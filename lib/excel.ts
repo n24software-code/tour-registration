@@ -26,6 +26,7 @@ const COLUMNS = [
   { header: 'Nationality', width: 16 },
   { header: 'Email', width: 28 },
   { header: 'Tour', width: 30 },
+  { header: 'Batch', width: 8 },
   { header: 'Date', width: 12 },
   { header: 'Departure time', width: 14 },
   { header: 'Pickup point', width: 22 },
@@ -37,9 +38,9 @@ const COLUMNS = [
 
 /** Columns that must stay literal text: leading zeros and a leading "+" have to survive. */
 const TEXT_COLUMNS = [3, 5]; // Mobile, ID number (1-based)
-const DATE_COLUMN = 9;
-const STATUS_COLUMN = 12;
-const TIMESTAMP_COLUMN = 15;
+const DATE_COLUMN = 10;
+const STATUS_COLUMN = 13;
+const TIMESTAMP_COLUMN = 16;
 
 const INK = 'FF1A2238';
 const PAPER = 'FFF5F6F2';
@@ -77,12 +78,13 @@ const safeName = (s: string) =>
 export function tripFileName(trip: Trip) {
   const date = trip.date || 'no-date';
   const time = (trip.departureTime || '0000').replace(':', '');
-  return `${safeName(trip.tourName)}_${date}_${time}.xlsx`;
+  const batch = trip.batch ? `-batch${trip.batch}` : '';
+  return `${safeName(trip.tourName)}${batch}_${date}_${time}.xlsx`;
 }
 
 /** Excel caps sheet names at 31 chars and forbids : \ / ? * [ ]. */
 function sheetName(trip: Trip, taken: Set<string>) {
-  const base = `${trip.departureTime.replace(':', '')} ${trip.tourName}`
+  const base = `${trip.departureTime.replace(':', '')}${trip.batch ? ` B${trip.batch}` : ''} ${trip.tourName}`
     .replace(/[:\\/?*[\]]/g, '-').slice(0, 28).trim() || 'Trip';
   let name = base;
   for (let i = 2; taken.has(name); i++) name = `${base.slice(0, 27)} ${i}`;
@@ -98,7 +100,8 @@ function addTripSheet(wb: import('exceljs').Workbook, { trip, rows }: TripSheet,
 
   // --- title row -----------------------------------------------------------
   const title = ws.addRow([
-    `${trip.tourName} · ${trip.date || 'No fixed date'} · ${trip.departureTime || '—'} · ${trip.pickupPoint}`,
+    `${trip.tourName}${trip.batch ? ` – Batch ${trip.batch}` : ''}`
+    + ` · ${trip.date || 'No fixed date'} · ${trip.departureTime || '—'} · ${trip.pickupPoint}`,
   ]);
   ws.mergeCells(1, 1, 1, COLUMNS.length);
   title.font = { bold: true, size: 13, color: { argb: INK } };
@@ -122,6 +125,7 @@ function addTripSheet(wb: import('exceljs').Workbook, { trip, rows }: TripSheet,
       guard(r.nationality ? nationalityLabel(r.nationality) : ''),
       guard(cell(r.email)),
       guard(cell(r.tourName)),
+      trip.batch ?? r.batch ?? '',
       excelDate(r.tourDate),
       guard(cell(r.departureTime)),
       guard(cell(trip.pickupPoint)),
@@ -149,6 +153,7 @@ function addTripSheet(wb: import('exceljs').Workbook, { trip, rows }: TripSheet,
 
 const SUMMARY_COLUMNS = [
   { header: 'Tour', width: 32 },
+  { header: 'Batch', width: 8 },
   { header: 'Date', width: 12 },
   { header: 'Departure time', width: 14 },
   { header: 'Pickup point', width: 22 },
@@ -182,11 +187,12 @@ function addSummarySheet(wb: import('exceljs').Workbook, sheets: TripSheet[]) {
   for (const { trip, rows } of sheets) {
     const c = tripCounts(rows, trip.capacity);
     const row = ws.addRow([
-      guard(trip.tourName), excelDate(trip.date), guard(trip.departureTime), guard(trip.pickupPoint),
+      guard(trip.tourName), trip.batch ?? '', excelDate(trip.date),
+      guard(trip.departureTime), guard(trip.pickupPoint),
       c.capacity, c.registered, c.seatsLeft,
       c.pending, c.confirmed, c.checkedIn, c.boarded, c.noShow, c.cancelled, c.flagged,
     ]);
-    row.getCell(2).numFmt = 'yyyy-mm-dd';
+    row.getCell(3).numFmt = 'yyyy-mm-dd';
   }
 
   ws.autoFilter = {

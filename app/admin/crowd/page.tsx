@@ -111,7 +111,9 @@ export default function CrowdPage() {
       {trip && (
         <>
           <p className="mt-5 flex items-center gap-2 text-sm font-medium">
-            <SlotMark slot={trip.slot} />{trip.pickupPoint} · bus leaves {trip.departureTime} · {formatTourDate(trip.date)}
+            <SlotMark slot={trip.slot} />
+            {trip.tourName}{trip.batch ? ` – Batch ${trip.batch}` : ''} · {trip.pickupPoint}
+            {' · '}bus leaves {trip.departureTime} · {formatTourDate(trip.date)}
           </p>
           <p className="mt-1 text-sm font-semibold tabular-nums">
             {counts.registered} registered

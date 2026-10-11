@@ -11,6 +11,7 @@ import {
   type Field, type FieldErrors, type RegistrationInput,
 } from '@/lib/validation';
 import { DEFAULT_COUNTRY, countryForNationality } from '@/lib/countries';
+import { batchOptionLabel, buildDestinations, isBookable, type Destination } from '@/lib/destinations';
 import { SlotMark, formatDate, seatsLeft } from '@/components/ui';
 import { LogoBand } from '@/components/Logos';
 import { NationalitySelect } from '@/components/NationalitySelect';
@@ -21,6 +22,106 @@ const EMPTY: RegistrationInput = {
   name: '', phone: '', phoneCountry: DEFAULT_COUNTRY, idNumber: '', nationality: '',
   tourId: '', tourDate: '', email: '', acceptedConditions: false,
 };
+
+/**
+ * One destination: its name, pickup and date, then a required departure choice when it
+ * runs in batches. A single-departure destination keeps the original one-click card.
+ */
+function DestinationCard({ destination: d, nationality, selectedTourId, onChoose }: {
+  destination: Destination;
+  nationality: string;
+  selectedTourId: string;
+  onChoose: (t: Tour) => void;
+}) {
+  const blocked = isRestricted({ restrictedNationalities: d.restrictedNationalities }, nationality);
+  const unavailable = blocked || d.full;
+  const selectedHere = d.batches.some((b) => b.id === selectedTourId);
+  const ring = d.slot === 'morning' ? 'border-sun ring-2 ring-sun/50' : 'border-dusk ring-2 ring-dusk/40';
+  const head = d.batches[0];
+
+  const details = (
+    <>
+      <span className="block font-medium">{d.name}</span>
+      <span className="mt-1 block text-sm text-ink/70">
+        {d.hasBatches ? 'Leaves' : `Bus leaves ${head.departureTime}`}
+        {head.date ? `${d.hasBatches ? '' : ','} ${formatDate(head.date)}` : ''} from {d.pickupPoint}
+      </span>
+    </>
+  );
+
+  // One departure: the whole card is the radio, exactly as before.
+  if (!d.hasBatches) {
+    const left = seatsLeft(head);
+    return (
+      <label
+        className={`block rounded-md border bg-white p-4 transition-colors has-[:focus-visible]:outline has-[:focus-visible]:outline-[3px] has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-sun ${
+          selectedHere ? ring : 'border-ink/20 hover:border-ink/50'
+        } ${unavailable ? 'cursor-not-allowed bg-ink/[0.03] opacity-60' : 'cursor-pointer'}`}
+      >
+        <input
+          type="radio" name="tour" value={head.id} className="sr-only"
+          disabled={unavailable || !isBookable(head)}
+          checked={selectedTourId === head.id} onChange={() => onChoose(head)}
+        />
+        {details}
+        {blocked ? (
+          <span className="mt-2 block text-xs font-medium text-clay">
+            {restrictionMessage({ name: d.name, restrictedNationalities: d.restrictedNationalities })}
+          </span>
+        ) : (
+          <span className={`mt-2 block text-xs font-medium ${
+            !isBookable(head) ? 'text-clay' : left <= 10 ? 'text-[#6b4409]' : 'text-ink/60'
+          }`}>
+            {!head.active ? 'Registration closed' : left === 0 ? 'Full' : `${left} ${left === 1 ? 'seat' : 'seats'} left`}
+          </span>
+        )}
+      </label>
+    );
+  }
+
+  // Several departures: pick the destination by picking one of them.
+  return (
+    <div
+      className={`rounded-md border bg-white p-4 transition-colors ${
+        selectedHere ? ring : 'border-ink/20'
+      } ${unavailable ? 'bg-ink/[0.03] opacity-60' : ''}`}
+      data-destination={d.id}
+    >
+      {details}
+
+      {blocked ? (
+        <p className="mt-2 text-xs font-medium text-clay">
+          {restrictionMessage({ name: d.name, restrictedNationalities: d.restrictedNationalities })}
+        </p>
+      ) : d.full ? (
+        <p className="mt-2 text-xs font-medium text-clay">Full &ndash; choose another tour</p>
+      ) : (
+        <fieldset className="mt-3">
+          <legend className="mb-1.5 text-xs font-medium text-ink/75">Choose a departure</legend>
+          <div className="space-y-1.5">
+            {d.batches.map((b) => {
+              const open = isBookable(b);
+              return (
+                <label
+                  key={b.id}
+                  className={`flex items-center gap-2.5 rounded border px-3 py-2 text-sm transition-colors has-[:focus-visible]:outline has-[:focus-visible]:outline-[3px] has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-sun ${
+                    selectedTourId === b.id ? 'border-ink bg-ink/[0.04] font-medium' : 'border-ink/20'
+                  } ${open ? 'cursor-pointer hover:border-ink/50' : 'cursor-not-allowed text-ink/50'}`}
+                >
+                  <input
+                    type="radio" name="tour" value={b.id} className="h-4 w-4 shrink-0 accent-ink"
+                    disabled={!open} checked={selectedTourId === b.id} onChange={() => onChoose(b)}
+                  />
+                  <span>{batchOptionLabel(b)}</span>
+                </label>
+              );
+            })}
+          </div>
+        </fieldset>
+      )}
+    </div>
+  );
+}
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -46,6 +147,7 @@ export default function RegisterPage() {
   );
 
   const chosen = tours?.find((t) => t.id === form.tourId);
+  const destinations = useMemo(() => buildDestinations(tours ?? []), [tours]);
   const idType = form.nationality ? idTypeFor(form.nationality) : undefined;
   const showConditions = needsConditions(chosen);
 
@@ -213,7 +315,7 @@ export default function RegisterPage() {
             {tours?.length === 0 && <p className="mt-3 text-ink/70">No tours are listed yet. Please check back soon.</p>}
             <div className="mt-4 grid gap-6 sm:grid-cols-2">
               {(['morning', 'evening'] as Slot[]).map((slot) => {
-                const list = tours?.filter((t) => t.slot === slot) ?? [];
+                const list = destinations.filter((d) => d.slot === slot);
                 if (!list.length) return null;
                 return (
                   <div key={slot} role="radiogroup" aria-labelledby={`${slot}-heading`}>
@@ -221,38 +323,15 @@ export default function RegisterPage() {
                       <SlotMark slot={slot} /> {SLOT_LABEL[slot]}
                     </h2>
                     <div className="space-y-2">
-                      {list.map((t) => {
-                        const left = seatsLeft(t);
-                        const blocked = isRestricted(t, form.nationality);
-                        const unavailable = !t.active || left === 0 || blocked;
-                        const selected = form.tourId === t.id;
-                        return (
-                          <label
-                            key={t.id}
-                            className={`block rounded-md border bg-white p-4 transition-colors has-[:focus-visible]:outline has-[:focus-visible]:outline-[3px] has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-sun ${
-                              selected
-                                ? slot === 'morning' ? 'border-sun ring-2 ring-sun/50' : 'border-dusk ring-2 ring-dusk/40'
-                                : 'border-ink/20 hover:border-ink/50'
-                            } ${unavailable ? 'cursor-not-allowed bg-ink/[0.03] opacity-60' : 'cursor-pointer'}`}
-                          >
-                            <input
-                              type="radio" name="tour" value={t.id} className="sr-only" disabled={unavailable}
-                              checked={selected} onChange={() => chooseTour(t)}
-                            />
-                            <span className="block font-medium">{t.name}</span>
-                            <span className="mt-1 block text-sm text-ink/70">
-                              Bus leaves {t.departureTime}{t.date ? `, ${formatDate(t.date)}` : ''} from {t.pickupPoint}
-                            </span>
-                            {blocked ? (
-                              <span className="mt-2 block text-xs font-medium text-clay">{restrictionMessage(t)}</span>
-                            ) : (
-                              <span className={`mt-2 block text-xs font-medium ${unavailable ? 'text-clay' : left <= 10 ? 'text-[#6b4409]' : 'text-ink/60'}`}>
-                                {!t.active ? 'Registration closed' : left === 0 ? 'Full' : `${left} ${left === 1 ? 'seat' : 'seats'} left`}
-                              </span>
-                            )}
-                          </label>
-                        );
-                      })}
+                      {list.map((d) => (
+                        <DestinationCard
+                          key={d.id}
+                          destination={d}
+                          nationality={form.nationality}
+                          selectedTourId={form.tourId}
+                          onChoose={chooseTour}
+                        />
+                      ))}
                     </div>
                   </div>
                 );

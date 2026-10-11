@@ -289,10 +289,35 @@ export function registrationBody(over: Record<string, unknown> = {}) {
 export const TOUR_IDS = {
   kapsarc: 'kapsarc-black-gold',
   sabic: 'sabic-home-of-innovation',
+  sabicB2: 'sabic-home-of-innovation-b2',
   aramco: 'aramco-kafd',
+  aramcoB2: 'aramco-kafd-b2',
   diriyah: 'diriyah-heritage-trail',
   downtown: 'downtown-national-history',
 } as const;
+
+/** The agreed batch schedule, mirroring scripts/migrate-batches.mjs. */
+export const BATCHES = {
+  sabic: [
+    { id: TOUR_IDS.sabic, batch: 1, departureTime: '08:00', capacity: 20 },
+    { id: TOUR_IDS.sabicB2, batch: 2, departureTime: '09:00', capacity: 20 },
+  ],
+  aramco: [
+    { id: TOUR_IDS.aramco, batch: 1, departureTime: '09:00', capacity: 10 },
+    { id: TOUR_IDS.aramcoB2, batch: 2, departureTime: '10:00', capacity: 10 },
+  ],
+} as const;
+
+/**
+ * Seats a batch without creating registrations, so a "Full" case costs one write
+ * instead of twenty. Returns the previous count so the test can put it back.
+ */
+export async function fillSeats(tourId: string, taken?: number) {
+  const t = await getTour(tourId);
+  const before = t.registeredCount;
+  await patchTour(tourId, { registeredCount: taken ?? t.capacity });
+  return before;
+}
 
 /**
  * Boulevard City was created through the admin UI, so its document id is generated
@@ -321,6 +346,7 @@ export async function getTour(tourId: string) {
     name: string; slot: string; pickupPoint: string; departureTime: string;
     date?: string; capacity: number; registeredCount: number; active: boolean; order: number;
     restrictedNationalities?: string[]; experienceDuration?: string; notices?: string[];
+    destinationId?: string; batch?: number | null;
   };
 }
 
@@ -339,7 +365,7 @@ export const getReg = async (code: string) =>
         status: string; busNumber?: string | null; flag?: string | null;
         email?: string | null; name: string; phone: string; phoneCountry?: string;
         idType?: 'national_id' | 'passport'; idNumber?: string;
-        nationality?: string; tourDate?: string; departureTime?: string;
+        nationality?: string; tourDate?: string; departureTime?: string; batch?: number | null;
         conditionsAcceptedAt?: unknown; mailId?: string | null;
       }
     | undefined;

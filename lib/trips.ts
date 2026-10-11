@@ -10,6 +10,8 @@ export interface Trip {
   key: string;
   tourId: string;
   tourName: string;
+  /** Which departure of the destination, when the tour runs in batches. */
+  batch?: number | null;
   slot: Slot;
   /** "YYYY-MM-DD", or "" for tours that have no fixed date. */
   date: string;
@@ -58,6 +60,7 @@ export function buildTrips(tours: Tour[], regs: Registration[]): Trip[] {
   for (const t of tours) {
     add({
       key: tripKey(t.id, t.date ?? '', t.departureTime), tourId: t.id, tourName: t.name, slot: t.slot,
+      batch: t.batch ?? null,
       date: t.date ?? '', departureTime: t.departureTime, pickupPoint: t.pickupPoint,
       capacity: t.capacity, tour: t, order: t.order,
     });
@@ -68,6 +71,7 @@ export function buildTrips(tours: Tour[], regs: Registration[]): Trip[] {
     const tour = byId.get(r.tourId);
     add({
       key, tourId: r.tourId, tourName: tour?.name ?? r.tourName, slot: tour?.slot ?? r.slot,
+      batch: tour?.batch ?? r.batch ?? null,
       date, departureTime, pickupPoint: tour?.pickupPoint ?? '—',
       capacity: tour?.capacity ?? 0, tour, order: tour?.order ?? 9999,
     });

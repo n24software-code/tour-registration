@@ -59,7 +59,9 @@ export default function Overview() {
               return (
                 <tr key={t.key} className="border-b border-ink/5 last:border-0" data-trip={t.key}>
                   <td className="cell">
-                    <span className="flex items-center gap-2 font-medium"><SlotMark slot={t.slot} />{t.tourName}</span>
+                    <span className="flex items-center gap-2 font-medium">
+                      <SlotMark slot={t.slot} />{t.tourName}{t.batch ? ` – Batch ${t.batch}` : ''}
+                    </span>
                     <span className="text-xs text-ink/60">
                       {formatTourDate(t.date)} · {t.departureTime}
                       {t.tour && !t.tour.active && ' · Registration closed'}

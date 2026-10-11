@@ -14,3 +14,15 @@ export const formatTourDate = (d?: string) => (d ? formatDate(d) : 'No fixed dat
 
 /** Old registrations have missing fields — show a dash rather than nothing. */
 export const orDash = (v?: string | null) => (v && String(v).trim()) || '—';
+
+/**
+ * How a tour is named wherever a batch matters: "SABIC - Home of Innovation – Batch 1 –
+ * 08:00". A tour that doesn't run in batches keeps its plain name.
+ */
+export function tourTitle(t: { name: string; batch?: number | null; departureTime?: string }) {
+  if (!t.batch) return t.name;
+  return `${t.name} – Batch ${t.batch}${t.departureTime ? ` – ${t.departureTime}` : ''}`;
+}
+
+/** Just the batch part, for places that already show the tour name. */
+export const batchLabel = (batch?: number | null) => (batch ? `Batch ${batch}` : '');

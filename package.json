@@ -8,6 +8,7 @@
     "start": "next start",
     "seed": "node scripts/seed.mjs",
     "migrate": "node scripts/migrate.mjs",
+    "migrate:batches": "node scripts/migrate-batches.mjs",
     "test-admins": "node scripts/create-test-admins.mjs",
     "load-key": "node scripts/load-service-account.mjs",
     "check-env": "node scripts/check-env.mjs",

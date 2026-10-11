@@ -5,6 +5,14 @@ export type Status = 'pending' | 'confirmed' | 'checked_in' | 'boarded' | 'no_sh
 export interface Tour {
   id: string;
   name: string;
+  /**
+   * Groups the batches of one destination. Every batch of SABIC shares "sabic", so the
+   * public form can show the destination once and offer its departures underneath.
+   * Tours that don't run in batches have no destinationId and `batch: null`.
+   */
+  destinationId?: string | null;
+  /** 1, 2, … for a batched tour; null for a tour that runs once. */
+  batch?: number | null;
   slot: Slot;
   pickupPoint: string;
   departureTime: string; // "08:00"
@@ -29,7 +37,7 @@ export const ID_TYPE_LABEL: Record<IdType, string> = {
   passport: 'Passport',
 };
 
-/** Delivery state written back by the Trigger Email extension onto mail/{id}. */
+/** Delivery state written back onto mail/{id} by the sendBookingConfirmation function. */
 export type MailState = 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'ERROR' | 'RETRY';
 
 export interface Registration {
@@ -54,6 +62,8 @@ export interface Registration {
   tourDate?: string;
   /** Copied from the tour at registration time, so a later edit doesn't rewrite history. */
   departureTime?: string;
+  /** Which batch of the destination, copied at registration time. */
+  batch?: number | null;
   status: Status;
   busNumber?: string | null;
   flag?: string | null; // message from Crowd team to Registration team

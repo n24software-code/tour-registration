@@ -17,6 +17,9 @@ const PERMISSIONS = {
   manageTeam: ['po'],
   // Deleting a registration erases the record for good, so it is the PO's call alone.
   deleteRegistrations: ['po'],
+  // Re-sending a confirmation is harmless but visible to the visitor, so it is limited
+  // to the teams who handle registrations.
+  resendConfirmation: ['po', 'pm', 'registration'],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type Permission = keyof typeof PERMISSIONS;

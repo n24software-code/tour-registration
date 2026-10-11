@@ -41,31 +41,53 @@ const BOULEVARD_INFO = {
   ],
 };
 
+// SABIC and Saudi Aramco each run two departures, modelled as one tour document per
+// batch so capacity, counts, Crowd lists and exports all work per batch. Keep this in
+// step with scripts/migrate-batches.mjs, which splits an existing database.
 const TOURS = [
   { id: 'kapsarc-black-gold', name: 'KAPSARC & Black Gold Museum', slot: 'morning', departureTime: '08:00' },
-  { id: 'sabic-home-of-innovation', name: 'SABIC - Home of Innovation', slot: 'morning', departureTime: '08:30',
+
+  { id: 'sabic-home-of-innovation', name: 'SABIC - Home of Innovation', slot: 'morning',
+    destinationId: 'sabic', batch: 1, departureTime: '08:00', capacity: 20,
     restrictedNationalities: SABIC_RESTRICTED },
-  { id: 'aramco-kafd', name: 'Saudi Aramco - KAFD', slot: 'morning', departureTime: '09:00' },
+  { id: 'sabic-home-of-innovation-b2', name: 'SABIC - Home of Innovation', slot: 'morning',
+    destinationId: 'sabic', batch: 2, departureTime: '09:00', capacity: 20,
+    restrictedNationalities: SABIC_RESTRICTED },
+
+  { id: 'aramco-kafd', name: 'Saudi Aramco - KAFD', slot: 'morning',
+    destinationId: 'aramco-kafd', batch: 1, departureTime: '09:00', capacity: 10 },
+  { id: 'aramco-kafd-b2', name: 'Saudi Aramco - KAFD', slot: 'morning',
+    destinationId: 'aramco-kafd', batch: 2, departureTime: '10:00', capacity: 10 },
+
   { id: 'diriyah-heritage-trail', name: 'Heritage Trail - Diriyah', slot: 'evening', departureTime: '16:30' },
   { id: 'downtown-national-history', name: 'Downtown & National History', slot: 'evening', departureTime: '17:00' },
   { id: 'boulevard-city', name: 'Boulevard City', slot: 'evening', departureTime: '16:00', ...BOULEVARD_INFO },
 ];
 
-/** A tour already added through the admin UI has a different id but the same name. */
-async function tourExists(id, name) {
+/**
+ * A tour already added through the admin UI has a different id but the same name.
+ * Batched tours share a name, so they are matched on name + batch together.
+ */
+async function tourExists(id, name, batch) {
   if ((await db.collection('tours').doc(id).get()).exists) return true;
-  return !(await db.collection('tours').where('name', '==', name).limit(1).get()).empty;
+  const sameName = await db.collection('tours').where('name', '==', name).get();
+  return sameName.docs.some((d) => (d.data().batch ?? null) === (batch ?? null));
 }
 
 for (const [i, t] of TOURS.entries()) {
-  const { id, restrictedNationalities = [], experienceDuration = '', notices = [], ...data } = t;
-  if (await tourExists(id, t.name)) { console.log(`skip   ${t.name} (already exists)`); continue; }
+  const {
+    id, restrictedNationalities = [], experienceDuration = '', notices = [],
+    capacity = 50, destinationId = id, batch = null, ...data
+  } = t;
+  const label = batch ? `${t.name} (batch ${batch})` : t.name;
+  if (await tourExists(id, t.name, batch)) { console.log(`skip   ${label} (already exists)`); continue; }
   await db.collection('tours').doc(id).set({
     ...data, pickupPoint: 'Main pickup area', date: '',
-    capacity: 50, registeredCount: 0, active: true, order: i + 1,
+    capacity, registeredCount: 0, active: true, order: i + 1,
+    destinationId, batch,
     restrictedNationalities, experienceDuration, notices,
   });
-  console.log(`added  ${t.name}`);
+  console.log(`added  ${label}`);
 }
 
 const [rawEmail, name = 'Product Owner', password] = process.argv.slice(2);

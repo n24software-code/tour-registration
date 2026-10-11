@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/lib/auth';
 import { useRunner, useTours } from '@/lib/hooks';
 import { addTour, saveTour, type TourFields } from '@/lib/actions';
@@ -13,11 +13,13 @@ const fieldsOf = (t: Tour): TourFields => ({
   restrictedNationalities: t.restrictedNationalities ?? [],
   experienceDuration: t.experienceDuration ?? '',
   notices: t.notices ?? [],
+  destinationId: t.destinationId ?? t.id,
+  batch: t.batch ?? null,
 });
 const blank: TourFields = {
   name: '', slot: 'morning', pickupPoint: 'Main pickup area', departureTime: '08:00',
   date: '', capacity: 50, active: true, restrictedNationalities: [],
-  experienceDuration: '', notices: [],
+  experienceDuration: '', notices: [], destinationId: '', batch: null,
 };
 
 const picked = (el: HTMLSelectElement) => Array.from(el.selectedOptions, (o) => o.value);
@@ -192,6 +194,39 @@ export default function ToursPage() {
   const { data: tours, loading, error } = useTours();
   const { run, busy, error: actionError, clearError } = useRunner();
   const [form, setForm] = useState<TourFields>(blank);
+  const addForm = useRef<HTMLFormElement>(null);
+
+  // Batches of one destination sit together, in departure order.
+  const groupedTours = useMemo(() => {
+    const groups = new Map<string, Tour[]>();
+    for (const t of tours) {
+      const key = t.destinationId || t.id;
+      const list = groups.get(key);
+      if (list) list.push(t); else groups.set(key, [t]);
+    }
+    return [...groups.entries()]
+      .map(([id, list]) => ({
+        id,
+        name: list[0].name,
+        batches: [...list].sort(
+          (a, b) => (a.batch ?? 0) - (b.batch ?? 0) || a.departureTime.localeCompare(b.departureTime)
+        ),
+      }))
+      .sort((a, b) => Math.min(...a.batches.map((t) => t.order)) - Math.min(...b.batches.map((t) => t.order)));
+  }, [tours]);
+
+  /** Pre-fills the add form with the next batch of an existing destination. */
+  function addBatchFor(batches: Tour[]) {
+    const last = batches[batches.length - 1];
+    setForm({
+      ...fieldsOf(last),
+      destinationId: last.destinationId ?? last.id,
+      batch: Math.max(0, ...batches.map((b) => b.batch ?? 0)) + 1,
+      capacity: last.capacity,
+    });
+    addForm.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    addForm.current?.querySelector<HTMLInputElement>('#new-time')?.focus();
+  }
 
   if (!admin) return null;
 
@@ -224,14 +259,52 @@ export default function ToursPage() {
             <th className="cell">Registration</th>
             <th className="cell"><span className="sr-only">Actions</span></th>
           </tr></thead>
-          <tbody>{tours.map((t) => <TourRow key={t.id} tour={t} admin={admin} run={run} busy={busy} />)}</tbody>
+          <tbody>
+            {groupedTours.map(({ id, name, batches }) => (
+              <Fragment key={id}>
+                {batches.length > 1 && (
+                  <tr className="border-b border-ink/10 bg-paper">
+                    <td className="cell font-semibold" colSpan={10}>
+                      {name}
+                      <span className="ml-2 font-normal text-ink/60">
+                        {batches.length} batches
+                      </span>
+                      <button
+                        type="button" className="btn-ghost btn-sm ml-3"
+                        onClick={() => addBatchFor(batches)}
+                      >
+                        Add batch
+                      </button>
+                    </td>
+                  </tr>
+                )}
+                {batches.map((t) => (
+                  <TourRow key={t.id} tour={t} admin={admin} run={run} busy={busy} />
+                ))}
+                {batches.length === 1 && (
+                  <tr className="border-b border-ink/5">
+                    <td className="cell" colSpan={10}>
+                      <button
+                        type="button" className="btn-ghost btn-sm"
+                        onClick={() => addBatchFor(batches)}
+                      >
+                        Add a batch to {name}
+                      </button>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
         </table>
         {loading && <p className="p-4 text-ink/70" role="status">Loading…</p>}
         {!loading && tours.length === 0 && <p className="p-6 text-ink/70">No tours yet. Add your first tour below.</p>}
       </div>
 
-      <form onSubmit={add} className="mt-8 rounded-md border border-ink/10 bg-white p-4">
-        <h2 className="font-semibold">Add a tour</h2>
+      <form ref={addForm} onSubmit={add} className="mt-8 rounded-md border border-ink/10 bg-white p-4">
+        <h2 className="font-semibold">
+          {form.batch ? `Add batch ${form.batch} of ${form.name || 'a destination'}` : 'Add a tour'}
+        </h2>
         <div className="mt-3 grid gap-3 sm:grid-cols-6">
           <div className="sm:col-span-3">
             <label htmlFor="new-name" className="label">Tour name</label>
@@ -254,6 +327,13 @@ export default function ToursPage() {
           <div className="sm:col-span-1">
             <label htmlFor="new-time" className="label">Departs</label>
             <input id="new-time" type="time" className="input" value={form.departureTime} onChange={(e) => setForm({ ...form, departureTime: e.target.value })} />
+          </div>
+          <div className="sm:col-span-1">
+            <label htmlFor="new-batch" className="label">Batch</label>
+            <input id="new-batch" type="number" min={1} className="input" placeholder="—"
+              value={form.batch ?? ''}
+              onChange={(e) => setForm({ ...form, batch: e.target.value ? Number(e.target.value) : null })} />
+            <p className="mt-1 text-xs text-ink/70">Leave blank for a one-off tour.</p>
           </div>
           <div className="sm:col-span-1">
             <label htmlFor="new-cap" className="label">Seats</label>

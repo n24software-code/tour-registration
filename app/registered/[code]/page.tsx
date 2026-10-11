@@ -24,6 +24,7 @@ export default async function RegisteredPage({ params }: { params: { code: strin
   // This page is reachable by anyone with the code, so it never shows the ID number.
   const date: string = reg.tourDate || tour?.date || '';
   const departureTime: string = reg.departureTime || tour?.departureTime || '';
+  const batch: number | null = reg.batch ?? tour?.batch ?? null;
   const trip = {
     experienceDuration: tour?.experienceDuration as string | undefined,
     notices: tour?.notices as string[] | undefined,
@@ -37,6 +38,9 @@ export default async function RegisteredPage({ params }: { params: { code: strin
           <SlotMark slot={slot} /> You&rsquo;re registered, {firstName}.
         </p>
         <h1 className="mt-3 text-3xl font-semibold">{reg.tourName}</h1>
+        {batch && (
+          <p className="mt-1 text-ink/75">Batch {batch} · departs {departureTime}</p>
+        )}
 
         <div className="mt-8 rounded-md border-2 border-dashed border-ink/30 bg-white p-6 text-center">
           <p className="text-sm text-ink/70">Your code — show it at the pickup area</p>

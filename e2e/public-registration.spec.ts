@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test';
 import {
   TOUR_IDS, adminDb, dayAfter, expectLogos, fillRegistrationForm, getReg, getTour, mailsTo,
-  nationalityBox, patchTour, registerVisitor, registrationBody, testEmail, testPassport,
+  nationalityBox, patchTour, registerVisitor, registrationBody, signIn, testEmail,
+  testPassport, waitForAudit,
 } from './helpers';
 import { EMAIL_ERROR } from '@/lib/validation';
 import { PHONE_ERROR } from '@/lib/phone';
@@ -211,6 +212,46 @@ test.describe('Public registration', () => {
     const nastyMail = (await mailsTo((await getReg((await nasty.json()).code))!.email!))[0];
     expect(nastyMail.message.html).not.toContain('<script>');
     expect(nastyMail.message.html).toContain('&lt;script&gt;');
+  });
+
+  test('Resend confirmation queues a second mail doc and writes an audit entry', async ({ page }) => {
+    const email = testEmail();
+    await patchTour(TOUR_IDS.kapsarc, { date: '' });
+    const code = await registerVisitor(page, {
+      name: 'Resend Visitor', tourId: TOUR_IDS.kapsarc, email, date: dayAfter(4),
+    });
+    const first = (await getReg(code))!.mailId;
+    expect((await mailsTo(email))).toHaveLength(1);
+
+    await signIn(page, 'registration');
+    await page.goto('/admin/registrations');
+    const row = page.locator('tr', { hasText: code });
+    await expect(row).toBeVisible({ timeout: 20_000 });
+    await row.getByRole('button', { name: 'Resend confirmation' }).click();
+
+    await expect(page.getByRole('status')).toContainText(`Confirmation re-sent to ${email}`);
+    await expect.poll(async () => (await mailsTo(email)).length, { timeout: 20_000 }).toBe(2);
+
+    // The registration now points at the new document, so the badge follows the resend.
+    const second = (await getReg(code))!.mailId;
+    expect(second).toBeTruthy();
+    expect(second).not.toBe(first);
+
+    const entry = await waitForAudit(code, 'registration:resend');
+    expect(entry.byRole).toBe('registration');
+    expect(entry.detail).toContain(email);
+
+    // Both copies are addressed and titled the same way.
+    for (const m of await mailsTo(email)) {
+      expect(m.to).toBe(email);
+      expect(m.message.subject).toContain(code);
+    }
+  });
+
+  test('the Crowd team cannot resend', async ({ page }) => {
+    await signIn(page, 'crowd');
+    await page.goto('/admin/registrations');
+    await expect(page.getByRole('button', { name: 'Resend confirmation' })).toHaveCount(0);
   });
 
   test('a malformed email is rejected', async ({ page }) => {

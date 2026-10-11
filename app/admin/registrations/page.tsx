@@ -2,7 +2,10 @@
 import { useMemo, useState } from 'react';
 import { useAuth } from '@/lib/auth';
 import { useRegistrations, useRunner, useTours } from '@/lib/hooks';
-import { cancelRegistration, deleteRegistration, logRegistrationsExport, setFlag, setStatus } from '@/lib/actions';
+import {
+  cancelRegistration, deleteRegistration, logRegistrationsExport, resendConfirmation,
+  setFlag, setStatus,
+} from '@/lib/actions';
 import { can } from '@/lib/roles';
 import { nationalityLabel } from '@/lib/nationalities';
 import { formatPhone } from '@/lib/phone';
@@ -12,7 +15,7 @@ import { exportTrips, tripFileName, type TripSheet } from '@/lib/excel';
 import { ID_TYPE_LABEL, STATUS_LABEL, type Admin, type Registration, type Status } from '@/lib/types';
 import { TourNoticesInline } from '@/components/TourNotices';
 import {
-  ErrorNote, SlotMark, StatusBadge, SuccessNote, formatTourDate, orDash,
+  ErrorNote, SlotMark, StatusBadge, SuccessNote, formatTourDate, orDash, tourTitle,
 } from '@/components/ui';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 
@@ -72,9 +75,10 @@ function Counts({ counts, mismatch }: {
   );
 }
 
-function Row({ reg: r, admin, run, busy, onDelete, mail }: {
+function Row({ reg: r, admin, run, busy, onDelete, onResend, mail }: {
   reg: Registration; admin: Admin; run: ReturnType<typeof useRunner>['run'];
-  busy: string | null; onDelete: (r: Registration) => void; mail?: MailStatus;
+  busy: string | null; onDelete: (r: Registration) => void;
+  onResend: (r: Registration) => void; mail?: MailStatus;
 }) {
   return (
     <tr className={`border-b border-ink/5 last:border-0 ${r.flag ? 'bg-clay/[0.07] shadow-[inset_4px_0_0_#B4412F]' : ''}`}>
@@ -131,6 +135,11 @@ function Row({ reg: r, admin, run, busy, onDelete, mail }: {
               Cancel
             </button>
           )}
+          {can(admin.role, 'resendConfirmation') && r.email && (
+            <button className="btn-ghost btn-sm" disabled={busy === r.id} onClick={() => onResend(r)}>
+              Resend confirmation
+            </button>
+          )}
           {can(admin.role, 'deleteRegistrations') && (
             <button className="btn-danger btn-sm" disabled={busy === r.id} onClick={() => onDelete(r)}>
               Delete
@@ -142,12 +151,16 @@ function Row({ reg: r, admin, run, busy, onDelete, mail }: {
   );
 }
 
-function Section({ trip, counts, mismatch, rows, admin, run, busy, open, onToggle, onExport, onDelete, mailStatuses }: {
+function Section({
+  trip, counts, mismatch, rows, admin, run, busy, open, onToggle, onExport, onDelete,
+  onResend, mailStatuses,
+}: {
   trip: Trip; counts: TripCounts; mismatch?: { counted: number; stored: number };
   rows: Registration[]; admin: Admin;
   run: ReturnType<typeof useRunner>['run']; busy: string | null;
   open: boolean; onToggle: () => void;
   onExport: () => void; onDelete: (r: Registration) => void;
+  onResend: (r: Registration) => void;
   mailStatuses: Map<string, MailStatus>;
 }) {
   const panelId = `trip-${slug(trip.key)}`;
@@ -162,7 +175,9 @@ function Section({ trip, counts, mismatch, rows, admin, run, busy, open, onToggl
           <span aria-hidden className={`text-ink/50 transition-transform ${open ? 'rotate-90' : ''}`}>▶</span>
           <SlotMark slot={trip.slot} />
           <span>
-            <span className="block font-semibold">{trip.tourName}</span>
+            <span className="block font-semibold">
+              {trip.tourName}{trip.batch ? ` – Batch ${trip.batch}` : ''}
+            </span>
             <span className="block text-xs text-ink/70">
               {formatTourDate(trip.date)} · {trip.departureTime || '—'} · {trip.pickupPoint}
             </span>
@@ -197,7 +212,8 @@ function Section({ trip, counts, mismatch, rows, admin, run, busy, open, onToggl
               </tr></thead>
               <tbody>
                 {rows.map((r) => (
-                  <Row key={r.id} reg={r} admin={admin} run={run} busy={busy} onDelete={onDelete}
+                  <Row key={r.id} reg={r} admin={admin} run={run} busy={busy}
+                    onDelete={onDelete} onResend={onResend}
                     mail={r.mailId ? mailStatuses.get(r.mailId) : undefined} />
                 ))}
               </tbody>
@@ -276,6 +292,13 @@ export default function RegistrationsPage() {
     filtering ? 'filtered view' : 'all trips'
   );
 
+  function resend(r: Registration) {
+    run(r.id, async () => {
+      await resendConfirmation(r, admin!);
+      setNotice(`Confirmation re-sent to ${r.email}.`);
+    });
+  }
+
   function confirmDelete() {
     const r = deleting;
     if (!r) return;
@@ -313,7 +336,9 @@ export default function RegistrationsPage() {
           <label htmlFor="tour" className="sr-only">Tour</label>
           <select id="tour" className="input" value={tourId} onChange={(e) => setTourId(e.target.value)}>
             <option value="">All tours</option>
-            {tours.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            {tours.map((t) => (
+              <option key={t.id} value={t.id}>{tourTitle(t)}</option>
+            ))}
           </select>
         </div>
         <div>
@@ -356,6 +381,7 @@ export default function RegistrationsPage() {
               `${trip.tourName} · ${trip.date || 'no date'} · ${trip.departureTime}`
             )}
             onDelete={setDeleting}
+            onResend={resend}
           />
         ))}
       </div>
@@ -377,7 +403,7 @@ export default function RegistrationsPage() {
           ['Name', deleting.name],
           ['Code', deleting.id],
           [deleting.idType ? ID_TYPE_LABEL[deleting.idType] : 'ID', orDash(deleting.idNumber)],
-          ['Tour', deleting.tourName],
+          ['Tour', deleting.tourName + (deleting.batch ? ` – Batch ${deleting.batch}` : '')],
           ['Date', deleting.tourDate ? formatTourDate(deleting.tourDate) : '—'],
           ['Departure time', orDash(deleting.departureTime)],
         ] : undefined}

@@ -18,3 +18,9 @@ blob-report
 playwright/.cache
 *firebase-adminsdk*.json
 e2e/.tours-snapshot.json
+functions/lib
+functions/node_modules
+functions/.env
+functions/.env.*
+!functions/.env.example
+.runtimeconfig.json

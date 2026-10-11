@@ -1,8 +1,10 @@
 'use client';
 import {
-  addDoc, collection, deleteDoc, doc, increment, runTransaction, serverTimestamp, updateDoc,
+  addDoc, collection, deleteDoc, doc, getDoc, increment, runTransaction, serverTimestamp,
+  updateDoc,
 } from 'firebase/firestore';
 import { db } from './firebase';
+import { buildMailDoc } from './mail';
 import { nationalityLabel } from './nationalities';
 import { ID_TYPE_LABEL, type Admin, type Registration, type Role, type Status, type Tour } from './types';
 
@@ -76,6 +78,40 @@ export async function deleteRegistration(reg: Registration, admin: Admin) {
 }
 
 /**
+ * Queues a fresh booking confirmation for a registration whose first one never arrived.
+ *
+ * A new `mail/{id}` document is written rather than the old one being reset, so the
+ * delivery history is not overwritten and the Cloud Function — which skips anything
+ * already SUCCESS — has something new to pick up. The registration then points at the
+ * new document, which is what the Sent / Pending / Error badge follows.
+ */
+export async function resendConfirmation(reg: Registration, admin: Admin) {
+  if (!reg.email) throw new Error('This registration has no email address to send to.');
+
+  const tourSnap = await getDoc(doc(db, 'tours', reg.tourId));
+  const tour = tourSnap.data();
+
+  const mailRef = await addDoc(collection(db, 'mail'), buildMailDoc({
+    to: reg.email,
+    code: reg.id,
+    name: reg.name,
+    tourName: reg.tourName,
+    batch: reg.batch ?? tour?.batch ?? null,
+    tourDate: reg.tourDate ?? '',
+    departureTime: reg.departureTime ?? tour?.departureTime ?? '',
+    pickupPoint: tour?.pickupPoint ?? '',
+    experienceDuration: tour?.experienceDuration ?? null,
+    notices: tour?.notices ?? null,
+  }));
+
+  await updateDoc(doc(db, 'registrations', reg.id), {
+    mailId: mailRef.id, updatedAt: serverTimestamp(), updatedBy: admin.email,
+  });
+  await log(admin, 'registration:resend', reg.id, `${reg.email} · mail ${mailRef.id}`);
+  return mailRef.id;
+}
+
+/**
  * Records that someone downloaded a participant list. Anyone with `manageRegistrations`
  * may export, so the trail is how we know who took which trip's data, and when.
  */
@@ -93,19 +129,28 @@ export async function setFlag(reg: Registration, message: string | null, admin: 
 
 export type TourFields =
   Pick<Tour, 'name' | 'slot' | 'pickupPoint' | 'departureTime' | 'date' | 'capacity' | 'active'>
-  & { restrictedNationalities: string[]; experienceDuration: string; notices: string[] };
+  & {
+    restrictedNationalities: string[]; experienceDuration: string; notices: string[];
+    /** Groups the batches of one destination; defaults to the tour's own id. */
+    destinationId: string;
+    /** 1, 2, … for a batched tour; null when it runs once. */
+    batch: number | null;
+  };
 
 function checkTour(t: TourFields) {
   if (t.name.trim().length < 2) throw new Error('Enter a tour name.');
   if (!t.pickupPoint.trim()) throw new Error('Enter a pickup point.');
   if (!/^\d{2}:\d{2}$/.test(t.departureTime)) throw new Error('Enter a departure time, like 08:00.');
   if (!Number.isInteger(t.capacity) || t.capacity < 1) throw new Error('Capacity must be a whole number of at least 1.');
+  if (t.batch !== null && (!Number.isInteger(t.batch) || t.batch < 1))
+    throw new Error('Batch must be a whole number of at least 1, or blank.');
 }
 
 /** Blank notice lines are dropped, so an empty editor row never becomes a bullet. */
 const cleanTour = (t: TourFields): TourFields => ({
   ...t,
   name: t.name.trim(),
+  destinationId: t.destinationId.trim(),
   pickupPoint: t.pickupPoint.trim(),
   experienceDuration: t.experienceDuration.trim(),
   notices: t.notices.map((n) => n.trim()).filter(Boolean),
@@ -131,10 +176,14 @@ export async function saveTour(tourId: string, fields: TourFields, admin: Admin)
 
 export async function addTour(fields: TourFields, order: number, admin: Admin) {
   checkTour(fields);
+  const clean = cleanTour(fields);
   const ref = await addDoc(collection(db, 'tours'), {
-    ...cleanTour(fields), registeredCount: 0, order,
+    ...clean, registeredCount: 0, order,
   });
-  await log(admin, 'tour:add', null, `${ref.id}: ${fields.name}`);
+  // A standalone tour is its own destination; only batches share an explicit id.
+  if (!clean.destinationId) await updateDoc(ref, { destinationId: ref.id });
+  await log(admin, 'tour:add', null,
+    `${ref.id}: ${fields.name}${fields.batch ? ` (batch ${fields.batch})` : ''}`);
 }
 
 /** PO only (enforced by rules). */

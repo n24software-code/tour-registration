@@ -1,9 +1,10 @@
 import type { Slot, Status } from '@/lib/types';
 import { SLOT_NAME, STATUS_LABEL } from '@/lib/types';
-import { formatDate, formatTourDate, orDash } from '@/lib/format';
+import { batchLabel, formatDate, formatTourDate, orDash, tourTitle } from '@/lib/format';
+import { seatsLeft } from '@/lib/seats';
 
 // Re-exported so components keep importing their formatting from one place.
-export { formatDate, formatTourDate, orDash };
+export { formatDate, formatTourDate, orDash, tourTitle, batchLabel, seatsLeft };
 
 const STATUS_STYLE: Record<Status, string> = {
   pending: 'bg-ink/10 text-ink',
@@ -59,10 +60,12 @@ export function SuccessNote({ message, onClose }: { message: string; onClose?: (
   );
 }
 
-export function seatsLeft(t: { capacity: number; registeredCount: number }) {
-  return Math.max(0, t.capacity - t.registeredCount);
-}
-
-/** One line that names a trip: "08:30 · Sat, 15 Nov 2026 · SABIC - Home of Innovation". */
-export const tripLabel = (t: { departureTime: string; date: string; tourName: string }) =>
-  `${t.departureTime} · ${formatTourDate(t.date)} · ${t.tourName}`;
+/**
+ * One line that names a trip, e.g.
+ * "08:00 · Sat, 15 Nov 2026 · SABIC - Home of Innovation – Batch 1".
+ */
+export const tripLabel = (t: {
+  departureTime: string; date: string; tourName: string; batch?: number | null;
+}) =>
+  `${t.departureTime} · ${formatTourDate(t.date)} · ${t.tourName}`
+  + (t.batch ? ` – Batch ${t.batch}` : '');
