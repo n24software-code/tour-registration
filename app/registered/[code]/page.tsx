@@ -4,6 +4,7 @@ import type { Metadata } from 'next';
 import { adminDb } from '@/lib/firebase-admin';
 import { SlotMark, formatDate } from '@/components/ui';
 import { LogoBand } from '@/components/Logos';
+import { TourNotices } from '@/components/TourNotices';
 import type { Slot } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -20,9 +21,13 @@ export default async function RegisteredPage({ params }: { params: { code: strin
   const tour = (await db.collection('tours').doc(reg.tourId).get()).data();
   const firstName = String(reg.name).split(' ')[0]; // public URL: show the first name only
   const slot = reg.slot as Slot;
-  // This page is reachable by anyone with the code, so it never shows the passport number.
+  // This page is reachable by anyone with the code, so it never shows the ID number.
   const date: string = reg.tourDate || tour?.date || '';
   const departureTime: string = reg.departureTime || tour?.departureTime || '';
+  const trip = {
+    experienceDuration: tour?.experienceDuration as string | undefined,
+    notices: tour?.notices as string[] | undefined,
+  };
 
   return (
     <>
@@ -54,6 +59,10 @@ export default async function RegisteredPage({ params }: { params: { code: strin
         <p className={`mt-6 rounded-md px-4 py-3 font-medium ${slot === 'morning' ? 'bg-sun/20' : 'bg-dusk/10'}`}>
           Arrive 15 minutes before departure.
         </p>
+
+        <div className="mt-6">
+          <TourNotices tour={trip} heading="Before you go" />
+        </div>
         <p className="mt-6 text-sm text-ink/70">
           Take a screenshot of this page. Our registration team will review your registration and may contact you to confirm your seat.
         </p>

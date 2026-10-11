@@ -4,8 +4,10 @@ import { useAuth } from '@/lib/auth';
 import { useRegistrations, useRunner, useTours } from '@/lib/hooks';
 import { setFlag, setStatus } from '@/lib/actions';
 import { nationalityLabel } from '@/lib/nationalities';
+import { formatPhone, nationalDigits } from '@/lib/phone';
 import { buildTrips, groupByTrip, tripCounts } from '@/lib/trips';
-import type { Registration, Status } from '@/lib/types';
+import { ID_TYPE_LABEL, type Registration, type Status } from '@/lib/types';
+import { TourNoticesInline } from '@/components/TourNotices';
 import { ErrorNote, SlotMark, StatusBadge, formatTourDate, orDash, tripLabel } from '@/components/ui';
 
 // The Crowd team only works with visitors the Registration team has confirmed.
@@ -48,9 +50,18 @@ export default function CrowdPage() {
     const s = q.trim().toLowerCase();
     const digits = s.replace(/\D/g, '');
     return handedOver
-      .filter((r) => !s || r.id.toLowerCase().includes(s) || r.name.toLowerCase().includes(s)
-        || (r.passportNumber ?? '').toLowerCase().includes(s)
-        || (digits.length >= 3 && r.phone.replace(/\D/g, '').includes(digits)))
+      .filter((r) => {
+        if (!s) return true;
+        if (r.id.toLowerCase().includes(s) || r.name.toLowerCase().includes(s)) return true;
+        if ((r.idNumber ?? '').toLowerCase().includes(s)) return true;
+        if (digits.length < 3) return false;
+        // Match the number with or without its country code: "0501234567", "501234567"
+        // and "+966501234567" all have to find the same visitor.
+        const stored = r.phone.replace(/\D/g, '');
+        const national = nationalDigits(r.phone).replace(/\D/g, '');
+        return stored.includes(digits) || national.includes(digits)
+          || digits.includes(national) && national.length > 0;
+      })
       .sort((a, b) => ORDER[a.status]! - ORDER[b.status]! || a.name.localeCompare(b.name));
   }, [handedOver, q]);
 
@@ -106,6 +117,7 @@ export default function CrowdPage() {
             {counts.registered} registered
             <span className="font-normal text-ink/70"> · {counts.seatsLeft} seats left ({counts.capacity})</span>
           </p>
+          {trip.tour && <TourNoticesInline tour={trip.tour} />}
 
           <dl className="mt-3 grid grid-cols-4 gap-2 text-center" aria-live="polite">
             {[
@@ -141,9 +153,12 @@ export default function CrowdPage() {
                     <span className="font-mono text-lg font-semibold tracking-wider">{r.id}</span>
                     <span className="min-w-0 flex-1">
                       <span className="block font-medium">{r.name}</span>
-                      <a href={`tel:${r.phone}`} className="block text-sm text-ink/70 underline">{r.phone}</a>
+                      <a href={`tel:${r.phone}`} className="block text-sm text-ink/70 underline">
+                        {formatPhone(r.phone) || r.phone}
+                      </a>
                       <span className="block text-xs text-ink/70">
-                        Passport <span className="font-mono">{orDash(r.passportNumber)}</span>
+                        {r.idType ? ID_TYPE_LABEL[r.idType] : 'ID'}{' '}
+                        <span className="font-mono">{orDash(r.idNumber)}</span>
                         {' · '}{r.nationality ? nationalityLabel(r.nationality) : '—'}
                       </span>
                     </span>

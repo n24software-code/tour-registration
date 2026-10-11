@@ -2,7 +2,12 @@ import { NextResponse } from 'next/server';
 import { randomInt } from 'crypto';
 import { FieldValue } from 'firebase-admin/firestore';
 import { adminDb } from '@/lib/firebase-admin';
-import { isRestricted, normalize, restrictionMessage, validate, type TourRules } from '@/lib/validation';
+import {
+  CONDITIONS_ERROR, idTypeFor, isRestricted, needsConditions, normalize,
+  restrictionMessage, validate, type TourRules,
+} from '@/lib/validation';
+import { parsePhone } from '@/lib/phone';
+import { buildMailDoc } from '@/lib/mail';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,11 +27,19 @@ export async function POST(req: Request) {
   // Everything that doesn't need the tour: required fields, formats, dates in the past.
   const errors = validate(input);
   if (Object.keys(errors).length) return NextResponse.json({ errors }, { status: 400 });
-  const { name, email, phone, passportNumber, nationality, tourId, tourDate } = input;
+  const { name, email, nationality, tourId, tourDate, acceptedConditions } = input;
+
+  // The server decides which document was asked for; whatever the client claimed is
+  // ignored, so a passport can never be filed as a National ID or the other way round.
+  const idType = idTypeFor(nationality);
+  const idNumber = input.idNumber;
+
+  // validate() already proved this parses, so the non-null assertion is safe.
+  const phone = parsePhone(input.phone, input.phoneCountry)!;
 
   try {
     const db = adminDb();
-    const code = await db.runTransaction(async (tx) => {
+    const result = await db.runTransaction(async (tx) => {
       const tourRef = db.collection('tours').doc(tourId);
       const regs = db.collection('registrations');
 
@@ -41,9 +54,14 @@ export async function POST(req: Request) {
         name: tour.name,
         date: tour.date,
         restrictedNationalities: tour.restrictedNationalities ?? [],
+        notices: tour.notices ?? [],
       };
       if (isRestricted(rules, nationality))
         throw new HttpError(409, restrictionMessage(rules), 'nationality');
+
+      // A tour with conditions cannot be booked without accepting them.
+      if (needsConditions(rules) && !acceptedConditions)
+        throw new HttpError(400, CONDITIONS_ERROR, 'acceptedConditions');
 
       if (tour.date && tourDate !== tour.date)
         throw new HttpError(409, `This tour runs on ${tour.date}. Choose that date.`, 'tourDate');
@@ -51,14 +69,17 @@ export async function POST(req: Request) {
       if ((tour.registeredCount ?? 0) >= tour.capacity)
         throw new HttpError(409, 'This tour is full. Choose another tour.', 'tourId');
 
-      // One passport per tour per day — a cancelled registration frees it up again.
+      // One identity document per tour per day — a cancelled registration frees it up.
       const existing = await tx.get(
-        regs.where('passportNumber', '==', passportNumber)
+        regs.where('idType', '==', idType)
+          .where('idNumber', '==', idNumber)
           .where('tourId', '==', tourId)
           .where('tourDate', '==', tourDate)
       );
-      if (existing.docs.some((d) => d.data().status !== 'cancelled'))
-        throw new HttpError(409, 'This passport is already registered for this tour on this date.', 'passportNumber');
+      if (existing.docs.some((d) => d.data().status !== 'cancelled')) {
+        const what = idType === 'national_id' ? 'National ID' : 'passport';
+        throw new HttpError(409, `This ${what} is already registered for this tour on this date.`, 'idNumber');
+      }
 
       let code = newCode();
       for (let i = 0; (await tx.get(regs.doc(code))).exists; i++) {
@@ -67,34 +88,38 @@ export async function POST(req: Request) {
       }
 
       // --- writes ---
+      // The confirmation is written in the same transaction, so a registration can
+      // never exist without its email queued, nor an email without its registration.
+      const mailRef = db.collection('mail').doc();
       tx.create(regs.doc(code), {
-        name, email: email || null, phone, passportNumber, nationality,
+        name, email, phone: phone.e164, phoneCountry: phone.country,
+        idType, idNumber, nationality,
         tourId, tourName: tour.name, slot: tour.slot,
         tourDate, departureTime: tour.departureTime,
         status: 'pending', busNumber: null, flag: null,
+        conditionsAcceptedAt: needsConditions(rules) ? FieldValue.serverTimestamp() : null,
+        mailId: mailRef.id,
         createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
         updatedBy: 'visitor',
       });
       tx.update(tourRef, { registeredCount: FieldValue.increment(1) });
 
-      // No email address, no email.
-      if (email && process.env.ENABLE_CONFIRMATION_EMAIL === 'true') {
-        tx.set(db.collection('mail').doc(), {
-          to: email,
-          message: {
-            subject: `Your tour code ${code} – ${tour.name}`,
-            text:
-              `Hi ${name.split(' ')[0]},\n\nYou're registered for ${tour.name}.\n\n` +
-              `Your code: ${code}\nPickup point: ${tour.pickupPoint}\n` +
-              `Bus leaves: ${tour.departureTime} on ${tourDate}\n\n` +
-              `Arrive 15 minutes before departure and show this code to our team.\n`,
-          },
-        });
-      }
+      tx.set(mailRef, buildMailDoc({
+        to: email,
+        code,
+        name,
+        tourName: tour.name,
+        tourDate,
+        departureTime: tour.departureTime,
+        pickupPoint: tour.pickupPoint,
+        experienceDuration: tour.experienceDuration ?? null,
+        notices: tour.notices ?? null,
+      }));
+
       return code;
     });
 
-    return NextResponse.json({ code }, { status: 201 });
+    return NextResponse.json({ code: result }, { status: 201 });
   } catch (e) {
     if (e instanceof HttpError) {
       const payload = e.field ? { message: e.message, errors: { [e.field]: e.message } } : { message: e.message };

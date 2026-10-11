@@ -1,20 +1,25 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import type { Slot, Tour } from '@/lib/types';
 import { SLOT_LABEL } from '@/lib/types';
 import {
-  FIELD_ORDER, isRestricted, normalize, restrictionMessage, todayISO, validate,
+  FIELD_ORDER, ID_HINT, ID_LABEL, idTypeFor, isRestricted, needsConditions, normalize,
+  restrictionMessage, todayISO, validate,
   type Field, type FieldErrors, type RegistrationInput,
 } from '@/lib/validation';
+import { DEFAULT_COUNTRY, countryForNationality } from '@/lib/countries';
 import { SlotMark, formatDate, seatsLeft } from '@/components/ui';
 import { LogoBand } from '@/components/Logos';
 import { NationalitySelect } from '@/components/NationalitySelect';
+import { PhoneField } from '@/components/PhoneField';
+import { TourNotices, hasTripInfo } from '@/components/TourNotices';
 
 const EMPTY: RegistrationInput = {
-  name: '', phone: '', passportNumber: '', nationality: '', tourId: '', tourDate: '', email: '',
+  name: '', phone: '', phoneCountry: DEFAULT_COUNTRY, idNumber: '', nationality: '',
+  tourId: '', tourDate: '', email: '', acceptedConditions: false,
 };
 
 export default function RegisterPage() {
@@ -26,6 +31,8 @@ export default function RegisterPage() {
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
   const today = useMemo(() => todayISO(), []);
+  // Once the visitor picks a country themselves, the nationality stops overriding it.
+  const countryTouched = useRef(false);
 
   // Live, so seats left stays accurate while the visitor fills in the form.
   useEffect(
@@ -39,11 +46,13 @@ export default function RegisterPage() {
   );
 
   const chosen = tours?.find((t) => t.id === form.tourId);
+  const idType = form.nationality ? idTypeFor(form.nationality) : undefined;
+  const showConditions = needsConditions(chosen);
 
   // Picking a restricted nationality takes the tour away again, with the reason shown.
   useEffect(() => {
     if (chosen && isRestricted(chosen, form.nationality)) {
-      setForm((f) => ({ ...f, tourId: '', tourDate: '' }));
+      setForm((f) => ({ ...f, tourId: '', tourDate: '', acceptedConditions: false }));
       setErrors((e) => ({ ...e, tourId: restrictionMessage(chosen) }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -54,15 +63,43 @@ export default function RegisterPage() {
     if (errors[k]) setErrors({ ...errors, [k]: undefined });
   };
 
+  /**
+   * The nationality drives two other fields: it suggests the dial code (until the
+   * visitor overrides it) and it decides whether we ask for a National ID or a passport.
+   * Switching between the two clears the value, because they are different documents.
+   */
+  function chooseNationality(code: string) {
+    setForm((f) => {
+      const wasType = f.nationality ? idTypeFor(f.nationality) : undefined;
+      const nowType = code ? idTypeFor(code) : undefined;
+      const suggested = countryForNationality(code);
+      return {
+        ...f,
+        nationality: code,
+        idNumber: wasType === nowType ? f.idNumber : '',
+        phoneCountry: !countryTouched.current && suggested ? suggested : f.phoneCountry,
+      };
+    });
+    setErrors((e) => ({ ...e, nationality: undefined, idNumber: undefined }));
+  }
+
   /** Choosing a tour fills in its fixed date, or clears the date so it can be picked. */
   function chooseTour(t: Tour) {
-    setForm({ ...form, tourId: t.id, tourDate: t.date ? t.date : form.tourDate });
-    setErrors({ ...errors, tourId: undefined, tourDate: undefined });
+    setForm({
+      ...form,
+      tourId: t.id,
+      tourDate: t.date ? t.date : form.tourDate,
+      // Consent belongs to the tour you consented to, so it never carries across.
+      acceptedConditions: false,
+    });
+    setErrors({ ...errors, tourId: undefined, tourDate: undefined, acceptedConditions: undefined });
   }
 
   function focusFirst(errs: FieldErrors) {
     const first = FIELD_ORDER.find((f) => errs[f]);
-    if (first) document.getElementById(first === 'tourId' ? 'tours' : first)?.focus();
+    if (!first) return;
+    const target = first === 'tourId' ? 'tours' : first === 'phoneCountry' ? 'phone' : first;
+    document.getElementById(target)?.focus();
   }
 
   async function submit(e: React.FormEvent) {
@@ -110,28 +147,62 @@ export default function RegisterPage() {
               <input id="name" className="input" value={form.name} onChange={set('name')} autoComplete="name" {...aria('name')} />
               {err('name')}
             </div>
-            <div>
-              <label className="label" htmlFor="phone">Mobile number</label>
-              <input id="phone" type="tel" inputMode="tel" className="input" placeholder="05X XXX XXXX or +966 5X XXX XXXX"
-                value={form.phone} onChange={set('phone')} autoComplete="tel" {...aria('phone')} />
+
+            <div className="sm:col-span-2">
+              <span className="label block" id="phone-label">Mobile number</span>
+              <PhoneField
+                countryId="phoneCountry"
+                numberId="phone"
+                country={form.phoneCountry}
+                number={form.phone}
+                onCountryChange={(code) => {
+                  countryTouched.current = true;
+                  setForm((f) => ({ ...f, phoneCountry: code }));
+                  setErrors((e) => ({ ...e, phone: undefined }));
+                }}
+                onNumberChange={(value) => {
+                  setForm((f) => ({ ...f, phone: value }));
+                  setErrors((e) => ({ ...e, phone: undefined }));
+                }}
+                invalid={!!errors.phone}
+                describedBy={errors.phone ? 'phone-error' : undefined}
+              />
               {err('phone')}
             </div>
+
             <div>
-              <label className="label" htmlFor="passportNumber">Passport number</label>
-              <input id="passportNumber" className="input uppercase" autoComplete="off" autoCapitalize="characters"
-                maxLength={20} value={form.passportNumber} onChange={set('passportNumber')} {...aria('passportNumber')} />
-              {err('passportNumber')}
-            </div>
-            <div className="sm:col-span-2">
               <label className="label" htmlFor="nationality">Nationality</label>
               <NationalitySelect
                 id="nationality"
                 value={form.nationality}
                 invalid={!!errors.nationality}
                 describedBy={errors.nationality ? 'nationality-error' : undefined}
-                onChange={(code) => { setForm((f) => ({ ...f, nationality: code })); setErrors((e) => ({ ...e, nationality: undefined })); }}
+                onChange={chooseNationality}
               />
               {err('nationality')}
+            </div>
+
+            <div>
+              <label className="label" htmlFor="idNumber">
+                {idType ? ID_LABEL[idType] : 'National ID or passport number'}
+              </label>
+              <input
+                id="idNumber"
+                className={`input ${idType === 'passport' ? 'uppercase' : ''}`}
+                autoComplete="off"
+                autoCapitalize={idType === 'passport' ? 'characters' : 'none'}
+                inputMode={idType === 'national_id' ? 'numeric' : 'text'}
+                maxLength={idType === 'national_id' ? 10 : 20}
+                disabled={!idType}
+                value={form.idNumber}
+                onChange={set('idNumber')}
+                {...aria('idNumber')}
+              />
+              {/* Announced so a screen-reader user hears the field change with the nationality. */}
+              <p className="mt-1 text-xs text-ink/60" aria-live="polite">
+                {idType ? ID_HINT[idType] : 'Choose your nationality first'}
+              </p>
+              {err('idNumber')}
             </div>
           </fieldset>
 
@@ -188,6 +259,35 @@ export default function RegisterPage() {
               })}
             </div>
             {err('tourId')}
+
+            {/* Shown only while a tour that carries this information is selected. */}
+            <div aria-live="polite" className="mt-6 empty:mt-0">
+              {chosen && hasTripInfo(chosen) && (
+                <>
+                  <TourNotices tour={chosen} id="trip-info" />
+                  {showConditions && (
+                    <div className="mt-4">
+                      <label className="flex cursor-pointer items-start gap-3 text-sm">
+                        <input
+                          id="acceptedConditions"
+                          type="checkbox"
+                          className="mt-0.5 h-5 w-5 shrink-0 accent-ink"
+                          checked={form.acceptedConditions}
+                          aria-invalid={!!errors.acceptedConditions}
+                          aria-describedby={errors.acceptedConditions ? 'acceptedConditions-error' : 'trip-info'}
+                          onChange={(e) => {
+                            setForm((f) => ({ ...f, acceptedConditions: e.target.checked }));
+                            setErrors((er) => ({ ...er, acceptedConditions: undefined }));
+                          }}
+                        />
+                        <span>I have read these conditions and confirm they don&rsquo;t apply to me.</span>
+                      </label>
+                      {err('acceptedConditions')}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </fieldset>
 
           <fieldset className="grid gap-5 sm:grid-cols-2">
@@ -210,10 +310,10 @@ export default function RegisterPage() {
               {err('tourDate')}
             </div>
             <div>
-              <label className="label" htmlFor="email">Email <span className="font-normal text-ink/60">(optional)</span></label>
+              <label className="label" htmlFor="email">Email</label>
               <input id="email" type="email" inputMode="email" className="input" value={form.email} onChange={set('email')}
                 autoComplete="email" {...aria('email')} />
-              <p className="mt-1 text-xs text-ink/60">Add one and we&rsquo;ll email your confirmation code.</p>
+              <p className="mt-1 text-xs text-ink/60">We&rsquo;ll send your booking confirmation here.</p>
               {err('email')}
             </div>
           </fieldset>

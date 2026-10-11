@@ -7,8 +7,9 @@
  * package is deliberately not used: it carries unpatched advisories.)
  */
 import { nationalityLabel } from './nationalities';
+import { formatPhone } from './phone';
 import { tripCounts, type Trip } from './trips';
-import { STATUS_LABEL, type Registration } from './types';
+import { ID_TYPE_LABEL, STATUS_LABEL, type Registration } from './types';
 
 export interface TripSheet {
   trip: Trip;
@@ -19,8 +20,9 @@ export interface TripSheet {
 const COLUMNS = [
   { header: 'Code', width: 10 },
   { header: 'Full name', width: 26 },
-  { header: 'Mobile', width: 16 },
-  { header: 'Passport number', width: 18 },
+  { header: 'Mobile', width: 18 },
+  { header: 'ID type', width: 12 },
+  { header: 'ID number', width: 18 },
   { header: 'Nationality', width: 16 },
   { header: 'Email', width: 28 },
   { header: 'Tour', width: 30 },
@@ -34,9 +36,10 @@ const COLUMNS = [
 ] as const;
 
 /** Columns that must stay literal text: leading zeros and a leading "+" have to survive. */
-const TEXT_COLUMNS = [3, 4]; // Mobile, Passport number (1-based)
-const DATE_COLUMN = 8;
-const TIMESTAMP_COLUMN = 14;
+const TEXT_COLUMNS = [3, 5]; // Mobile, ID number (1-based)
+const DATE_COLUMN = 9;
+const STATUS_COLUMN = 12;
+const TIMESTAMP_COLUMN = 15;
 
 const INK = 'FF1A2238';
 const PAPER = 'FFF5F6F2';
@@ -113,8 +116,9 @@ function addTripSheet(wb: import('exceljs').Workbook, { trip, rows }: TripSheet,
     const row = ws.addRow([
       guard(r.id),
       guard(cell(r.name)),
-      cell(r.phone),                                   // text column, left verbatim
-      cell(r.passportNumber),                          // text column, left verbatim
+      formatPhone(r.phone) || cell(r.phone),           // text column, left verbatim
+      r.idType ? ID_TYPE_LABEL[r.idType] : '',
+      cell(r.idNumber),                                // text column, left verbatim
       guard(r.nationality ? nationalityLabel(r.nationality) : ''),
       guard(cell(r.email)),
       guard(cell(r.tourName)),
@@ -132,7 +136,7 @@ function addTripSheet(wb: import('exceljs').Workbook, { trip, rows }: TripSheet,
     // Cancelled rows stay in the file but are unmistakable.
     if (r.status === 'cancelled') {
       row.font = { color: { argb: CLAY }, italic: true };
-      row.getCell(11).font = { color: { argb: CLAY }, bold: true, italic: true };
+      row.getCell(STATUS_COLUMN).font = { color: { argb: CLAY }, bold: true, italic: true };
     }
   }
 

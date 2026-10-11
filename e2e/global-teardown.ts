@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { getAuth } from 'firebase-admin/auth';
-import { adminApp, adminDb, TEST_PASSPORT_PREFIX, isTestReg } from './helpers';
+import { adminApp, adminDb, TEST_PASSPORT_PREFIX, isTestEmail, isTestReg } from './helpers';
 import { SNAPSHOT_PATH } from './global-setup';
 
 /** Throwaway team logins the Team spec creates. */
@@ -8,12 +8,14 @@ const MEMBER_PREFIX = 'e2e-member-';
 
 /**
  * Removes ONLY the suite's own data:
- *   - registrations whose email looks like e2e+<ts>@tour.test, or whose passport
- *     starts with E2E (email is optional, so passport is the reliable marker)
- *   - auditLogs rows pointing at those registration codes, plus the two kinds that
- *     have no surviving registration to point at: "registration:delete" (the row is
- *     gone, but its detail names an E2E passport) and "registrations:export" (no regId
- *     at all, so they are matched by action + written-during-this-run)
+ *   - registrations whose email looks like e2e+<ts>@tour.test (every registration now
+ *     has a required email) or whose ID number starts with E2E
+ *   - auditLogs rows pointing at those registration codes, plus the two kinds that have
+ *     no surviving registration to point at: "registration:delete" (the row is gone) and
+ *     "registrations:export" (no regId at all). Both are matched by action plus
+ *     written-during-this-run, since a deleted row leaves nothing else to match on.
+ *   - the booking confirmations queued for those registrations (mail/{id} whose `to`
+ *     is an e2e address)
  *   - tours added by the Tours test (name starts with "E2E ")
  * Then restores each surviving tour's capacity / registeredCount / active / pickup / time / date.
  */
@@ -49,23 +51,30 @@ export default async function globalTeardown() {
     deletedLogs += snap.size;
   }
 
-  // Rows whose registration the suite deleted on purpose: the code is gone, but the
-  // detail still names the E2E passport that only this suite ever invents.
-  const deleteLogs = await db.collection('auditLogs').where('action', '==', 'registration:delete').get();
-  for (const d of deleteLogs.docs) {
-    if (String(d.data().detail ?? '').includes(`passport ${TEST_PASSPORT_PREFIX}`)) {
-      await d.ref.delete();
-      deletedLogs++;
+  // Rows the suite wrote whose registration no longer exists to match on: a deleted
+  // registration leaves only its audit row, and an export row has no regId at all.
+  // Both are scoped to this run's start time so nothing older is ever touched.
+  for (const action of ['registration:delete', 'registrations:export']) {
+    const snap = await db.collection('auditLogs').where('action', '==', action).get();
+    for (const d of snap.docs) {
+      const detail = String(d.data().detail ?? '');
+      const at = d.data().at?.toMillis?.() ?? 0;
+      const mine = (startedAt && at >= startedAt)
+        || detail.toLowerCase().includes(TEST_PASSPORT_PREFIX.toLowerCase());
+      if (mine) { await d.ref.delete(); deletedLogs++; }
     }
   }
 
-  // Export rows have no regId, so they are matched by action + this run's start time.
-  if (startedAt) {
-    const exportLogs = await db.collection('auditLogs').where('action', '==', 'registrations:export').get();
-    for (const d of exportLogs.docs) {
-      const at = d.data().at?.toMillis?.() ?? 0;
-      if (at >= startedAt) { await d.ref.delete(); deletedLogs++; }
-    }
+  // --- their booking confirmations ---------------------------------------
+  // Every e2e registration now has a required e2e email, so the mail documents are
+  // found by recipient rather than by following each registration's mailId.
+  const mail = await db.collection('mail').get();
+  let deletedMail = 0;
+  for (const chunk of batches(mail.docs.filter((d) => isTestEmail(String(d.data().to ?? ''))), 400)) {
+    const b = db.batch();
+    chunk.forEach((d) => b.delete(d.ref));
+    await b.commit();
+    deletedMail += chunk.length;
   }
 
   // --- throwaway team logins -------------------------------------------
@@ -108,6 +117,7 @@ export default async function globalTeardown() {
         capacity: t.capacity, registeredCount: t.registeredCount, active: t.active,
         pickupPoint: t.pickupPoint, departureTime: t.departureTime, date: t.date, name: t.name,
         restrictedNationalities: t.restrictedNationalities,
+        experienceDuration: t.experienceDuration, notices: t.notices,
       });
       restored++;
     }
@@ -115,8 +125,9 @@ export default async function globalTeardown() {
   }
 
   console.log(
-    `[global-teardown] deleted ${deletedRegs} registrations, ${deletedLogs + deletedMemberLogs} audit rows, ` +
-    `${deletedTours} e2e tours, ${deletedMembers} throwaway logins; restored ${restored} tours`
+    `[global-teardown] deleted ${deletedRegs} registrations, ${deletedMail} mail docs, ` +
+    `${deletedLogs + deletedMemberLogs} audit rows, ${deletedTours} e2e tours, ` +
+    `${deletedMembers} throwaway logins; restored ${restored} tours`
   );
 }
 

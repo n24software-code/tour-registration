@@ -48,9 +48,12 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // Confirmation emails (Trigger Email extension) are server-written only.
+    // Booking confirmations (Trigger Email extension). Written only by the server, in
+    // the same transaction as the registration. The teams that handle registrations read
+    // them so the Registrations page can show whether delivery succeeded; nobody writes.
     match /mail/{id} {
-      allow read, write: if false;
+      allow read: if hasRole(['po', 'pm', 'registration']);
+      allow write: if false;
     }
   }
 }

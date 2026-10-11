@@ -53,34 +53,124 @@ listener, so both teams see each other's changes instantly without refreshing.
    ```
    Keep transparency by encoding with `png({ compressionLevel: 9 })` — **not** `palette: true`, which
    flattens the alpha channel.
-8. **Run:** `npm run dev`. Visitors use `/`, and staff sign in at `/login`. The PO adds the rest of the team under **Team**.
+8. **Booking confirmation emails.** `NEXT_PUBLIC_SITE_URL` and `MAIL_FROM` go in `.env.local`
+   (see `.env.example`), and the **Trigger Email from Firestore** extension does the sending —
+   see [Confirmation emails](#confirmation-emails) below for the one-time setup.
+9. **Run:** `npm run dev`. Visitors use `/`, and staff sign in at `/login`. The PO adds the rest of the team under **Team**.
 
-Edit pickup points, dates, times, capacity and nationality restrictions on the **Tours** page after seeding.
+Edit pickup points, dates, times, capacity, nationality restrictions and trip information on the
+**Tours** page after seeding.
 
 ## The registration form
 
-All fields are required except the email address, in this order:
+Every field is required, in this order:
 
 | Field               | Rules                                                                                               |
 |---------------------|-----------------------------------------------------------------------------------------------------|
 | **Full name**       | 2–100 characters.                                                                                   |
-| **Mobile number**   | 8–15 digits, optional leading `+`. Saudi (`05X XXX XXXX`, `+966 5X XXX XXXX`) and international.     |
-| **Passport number** | Trimmed, uppercased, spaces stripped. Letters and digits only, 5–20 characters.                     |
+| **Mobile number**   | A searchable country selector (flag, name, dial code — every country `libphonenumber-js` knows, Saudi Arabia first and the default) plus the national number. Validated with `libphonenumber-js/min`: the number has to be valid **for the selected country**. Stored as `phone` in E.164 (`+966501234567`) and `phoneCountry` (ISO2). Choosing a nationality pre-selects its dial code until the visitor picks one themselves. |
 | **Nationality**     | Searchable list of every ISO 3166-1 country's demonym (`lib/nationalities.ts`), Saudi pinned first. The ISO alpha-2 **code** is stored; the label is what's shown. |
+| **National ID / Passport** | One field whose meaning follows the nationality — see [Identity](#identity-national-id-or-passport). Disabled until a nationality is chosen. |
 | **Tour / Destination** | The morning/evening tour cards.                                                                  |
 | **Date**            | Filled in and read-only when the tour has a fixed `date`; otherwise a date picker with `min` = today (Asia/Riyadh). |
-| Email *(optional)*  | Validated only if filled in. The confirmation email is sent only when there is an address.           |
+| **Email**           | Required. Stored lowercase. The booking confirmation is sent here.                                   |
+| **Conditions**      | A tour that carries `notices` shows them before the date, with a required checkbox. See [Trip information](#trip-information-and-conditions). |
 
 `lib/validation.ts` holds the single copy of these rules; the form and `/api/register` both call
 `normalize()` then `validate()`, and failures come back as `{ errors: { field: message } }`.
 
-**One passport per tour per day.** `/api/register` refuses a second registration with the same
-`passportNumber` + `tourId` + `tourDate` unless the existing one is cancelled —
-*"This passport is already registered for this tour on this date."* The composite index for that query
-lives in `firestore.indexes.json`.
+**One identity document per tour per day.** `/api/register` refuses a second registration with the same
+`idType` + `idNumber` + `tourId` + `tourDate` unless the existing one is cancelled —
+*"This National ID / passport is already registered for this tour on this date."* The composite index for
+that query lives in `firestore.indexes.json`.
 
-The passport number is never shown on the public `/registered/[code]` page. Registrations created before
-these fields existed keep working everywhere and render as `—`.
+The ID number is never shown on the public `/registered/[code]` page, and never appears in the
+confirmation email. Registrations created before these fields existed keep working everywhere and
+render as `—`.
+
+### Identity: National ID or passport
+
+| Nationality | Label | Rules | Error |
+|-------------|-------|-------|-------|
+| Saudi (`SA`) | National ID number | Exactly 10 digits starting with `1`, with a valid check digit (Luhn, doubling from the left — `lib/saudi-id.ts`). `inputMode="numeric"`. | *Enter your 10-digit National ID number (it starts with 1).* |
+| Anything else | Passport number | Letters and digits only, 5–20 characters, uppercased. | *Enter your passport number as shown in your passport (letters and numbers only).* |
+| Not chosen yet | — | Field disabled, hint reads *Choose your nationality first*. | — |
+
+Switching between Saudi and non-Saudi clears the field and swaps the label, hint, `inputMode` and
+validation; the hint is in an `aria-live` region so the change is announced. **The server re-derives
+`idType` from the nationality and ignores whatever the client sends**, so a passport can never be filed
+as a National ID or the other way round. Both halves are stored: `idType` (`national_id` | `passport`)
+and `idNumber`.
+
+## Trip information and conditions
+
+A tour can carry two optional fields, edited by PO/PM on the **Tours** page and shown to visitors:
+
+- `experienceDuration` — free text, e.g. *15–20 minutes from entering the experience venue*.
+- `notices: string[]` — conditions a visitor must read before booking.
+
+They are rendered as a **Before you book** panel on the public form, and **only while that tour is
+selected** — it disappears when another tour is chosen and never appears for a tour without them. The
+panel sits in an `aria-live="polite"` region, duration first, then the notices as a list. The same
+information appears on `/registered/[code]`, in the confirmation email, and read-only in the
+Registrations and Crowd views for that trip.
+
+**When a tour has notices, the checkbox *"I have read these conditions and confirm they don't apply to
+me."* is required** — on the client and again in the `/api/register` transaction (`acceptedConditions:
+true`). The moment of consent is stored as `conditionsAcceptedAt`.
+
+Boulevard City is the tour this was built for; `scripts/migrate.mjs` and `scripts/seed.mjs` set its
+duration and its four notices. Nothing about it is special-cased in code — any tour given `notices`
+behaves the same way.
+
+## Confirmation emails
+
+Every successful registration writes a `mail/{id}` document **inside the same transaction** as the
+registration, so neither can exist without the other. Delivery is then the
+[Trigger Email from Firestore](https://extensions.dev/extensions/firebase/firestore-send-email)
+extension's job — the app never talks to an SMTP server, and a delivery failure later cannot fail a
+booking. The registration keeps the document id in `mailId`, and the Registrations page shows the
+state the extension writes back to `delivery.state` as **Sent / Pending / Error** beside the address.
+
+`lib/mail.ts` builds both bodies from one place: a plain-text part and an inline-styled, accessible
+HTML part with the logos as absolute URLs under `NEXT_PUBLIC_SITE_URL`. Every visitor-supplied value is
+escaped. The message carries the first name, the code in large print, tour, date, departure time,
+pickup point, *"Arrive 15 minutes before departure"*, the tour's duration and notices when it has them,
+and a link to `/registered/<code>`. Subject: `Booking confirmed – <Tour> – <CODE>`.
+
+| Variable | Purpose |
+|----------|---------|
+| `NEXT_PUBLIC_SITE_URL` | Absolute origin for the logo images and the booking link. No trailing slash. |
+| `MAIL_FROM` | The From address. Omit to use the extension's own default sender. |
+
+### Installing the extension (one time, needs the Blaze plan)
+
+1. **Upgrade the project to Blaze.** Extensions run on Cloud Functions, which the free plan doesn't cover.
+2. **Choose an SMTP provider** and get its credentials:
+   - *Google Workspace* (for an `@n24.sa` sender) — create a dedicated user, turn on 2-step
+     verification, generate an **App Password**, and use `smtps://USER%40n24.sa@smtp.gmail.com:465`.
+     Simple, but subject to Workspace's daily send limits.
+   - *SendGrid* — `smtps://apikey@smtp.sendgrid.net:465`, password = the API key.
+   - *Resend* — `smtps://resend@smtp.resend.com:465`, password = the API key.
+3. **Install it:** `npx firebase-tools ext:install firebase/firestore-send-email --project tour-registration-1727d`
+   and answer:
+   | Setting | Value |
+   |---------|-------|
+   | Email documents collection | `mail` |
+   | Default FROM address | the same address as `MAIL_FROM` |
+   | SMTP connection URI | from step 2 |
+   | SMTP password | the app password or API key (stored in Secret Manager) |
+   | Users/templates collections | leave empty |
+4. **Authenticate the domain** with the provider so mail isn't filtered: add its **SPF** include and
+   **DKIM** CNAME records to the `n24.sa` DNS zone, and a `DMARC` record if there isn't one. Google
+   Workspace senders already have SPF/DKIM if the domain is set up for mail.
+5. **Authorized domains:** add the production host under Authentication → Settings → Authorized domains,
+   and set `NEXT_PUBLIC_SITE_URL` to the same origin so the links in the email resolve.
+6. **Check it:** register once and watch `delivery.state` on the new `mail` document go
+   `PENDING → PROCESSING → SUCCESS`. The Registrations page shows the same thing.
+
+Until the extension is installed the documents simply accumulate, the UI shows **Queued**, and
+registration is unaffected.
 
 ## Nationality restrictions (the SABIC rule)
 
@@ -126,10 +216,10 @@ unpatched advisories).
 
 | | |
 |---|---|
-| **Columns** | `Code, Full name, Mobile, Passport number, Nationality, Email, Tour, Date, Departure time, Pickup point, Status, Bus, Flag, Registered at` |
+| **Columns** | `Code, Full name, Mobile, ID type, ID number, Nationality, Email, Tour, Date, Departure time, Pickup point, Status, Bus, Flag, Registered at` |
 | **Layout** | A title row naming the tour, date and time; a bold header row, frozen; auto-filter on; column widths set |
-| **Types** | Dates are real Excel dates. Mobile and passport are forced to text (`@`), so a leading zero and a leading `+` survive |
-| **Safety** | Values starting with `=`, `+`, `-` or `@` are apostrophe-prefixed. Mobile and passport are exempt: they are text-formatted cells, which Excel never evaluates, and a phone's `+` is meaningful |
+| **Types** | Dates are real Excel dates. Mobile and ID number are forced to text (`@`), so a leading zero and a leading `+` survive |
+| **Safety** | Values starting with `=`, `+`, `-` or `@` are apostrophe-prefixed. Mobile and ID number are exempt: they are text-formatted cells, which Excel never evaluates, and a phone's `+` is meaningful |
 | **Cancelled** | Included and clearly labelled (clay italic), but excluded from every count |
 | **File name** | `<tour-name>_<YYYY-MM-DD>_<HHmm>.xlsx`, the date and time being the trip's own |
 | **Export all** | One worksheet per trip, plus a **Summary** sheet (first) listing each trip with its counts |
@@ -195,11 +285,11 @@ until someone presses **Mark resolved**.
 
 | Collection            | Fields                                                                                                     |
 |-----------------------|------------------------------------------------------------------------------------------------------------|
-| `tours/{id}`          | name, slot (`morning`/`evening`), pickupPoint, departureTime (`"08:00"`), date (`"YYYY-MM-DD"` or `""`), capacity, registeredCount, active, order, restrictedNationalities (ISO alpha-2 codes that may not join; `[]` for none) |
-| `registrations/{CODE}`| The 6-character code is the doc ID. name, phone, passportNumber (uppercase), nationality (ISO alpha-2), email (lowercase, or `null`), tourId, tourName, slot, tourDate (`"YYYY-MM-DD"`), departureTime, status, busNumber, flag, createdAt, updatedAt, updatedBy, checkedInAt, boardedAt |
+| `tours/{id}`          | name, slot (`morning`/`evening`), pickupPoint, departureTime (`"08:00"`), date (`"YYYY-MM-DD"` or `""`), capacity, registeredCount, active, order, restrictedNationalities (ISO alpha-2 codes that may not join; `[]` for none), experienceDuration (`""` for none), notices (`[]` for none) |
+| `registrations/{CODE}`| The 6-character code is the doc ID. name, email (lowercase), phone (E.164), phoneCountry (ISO2), idType (`national_id`/`passport`), idNumber, nationality (ISO alpha-2), tourId, tourName, slot, tourDate (`"YYYY-MM-DD"`), departureTime, status, busNumber, flag, conditionsAcceptedAt, mailId, createdAt, updatedAt, updatedBy, checkedInAt, boardedAt |
 | `admins/{uid}`        | email, name, role (`po`/`pm`/`registration`/`crowd`)                                                       |
 | `auditLogs/{id}`      | action, regId, detail, byUid, byEmail, byRole, at. Append-only; PO/PM can read.                          |
-| `mail/{id}`           | Trigger Email extension format (`to`, `message.subject`, `message.text`). Server-only.                    |
+| `mail/{id}`           | Trigger Email extension format (`to`, optional `from`, `message.subject/text/html`). Written by the server only; PO/PM/Registration may read it so the UI can show `delivery.state`. |
 
 Registrations are created **only** by `POST /api/register` (Admin SDK) inside a transaction that checks the
 tour is open, that the visitor's nationality isn't restricted, that the date matches the tour's fixed date,
@@ -230,16 +320,25 @@ lib/
   hooks.ts                  useTours, useRegistrations, useTourRegistrations, useAdmins (onSnapshot)
   validation.ts             shared client/server form validation
   nationalities.ts          ISO 3166-1 alpha-2 + demonym, Saudi pinned first
+  countries.ts              flag + name + dial code, derived from libphonenumber metadata
+  phone.ts                  parse/validate/format on libphonenumber-js/min
+  saudi-id.ts               National ID check digit
+  mail.ts                   the booking confirmation (text + HTML)
+  mail-status.ts            live delivery state from mail/{id}.delivery
+  format.ts                 date/dash helpers shared by server, client and scripts
   trips.ts                  destination + date + departure time grouping, and the counts
   excel.ts                  .xlsx export (exceljs, loaded on demand)
 components/
   ui.tsx                    status badge, sun/moon marks, date helpers
   Logos.tsx                 the three partner logos + the public page band
   ConfirmDialog.tsx         accessible modal (focus trap, Escape, focus return)
+  Combobox.tsx              the shared type-to-search picker
+  PhoneField.tsx            country dial code + national number
+  TourNotices.tsx           "Before you book" panel and its inline admin variant
   NationalitySelect.tsx     searchable nationality combobox
 public/logos/               logo1 WPC Energy, logo2 Congress, logo3 Ministry of Energy
 scripts/seed.mjs            tours + first PO
-scripts/migrate.mjs         backfills tours' restrictedNationalities
+scripts/migrate.mjs         tour restrictions + Boulevard City info + passport → idType/idNumber
 firestore.rules, firestore.indexes.json, firebase.json, .firebaserc
 ```
 
@@ -251,8 +350,8 @@ firestore.rules, firestore.indexes.json, firebase.json, .firebaserc
 - [ ] **Environment variables:** add every key from `.env.example` in the hosting dashboard. Store `FIREBASE_PRIVATE_KEY`
       as a secret (App Hosting: `apphosting.yaml` + Cloud Secret Manager).
 - [ ] **Authorized domains:** add the production domain under Authentication → Settings → Authorized domains.
-- [ ] **Confirmation emails:** install the **Trigger Email from Firestore** extension (collection `mail`), configure SMTP,
-      then set `ENABLE_CONFIRMATION_EMAIL=true`.
+- [ ] **Confirmation emails:** install the **Trigger Email from Firestore** extension — see
+      [Confirmation emails](#confirmation-emails). Until then the documents queue up and nothing is sent.
 - [ ] **Rules:** run `npx firebase-tools deploy --only firestore` again after any change to `firestore.rules`.
 - [ ] **Backups:** enable Firestore point-in-time recovery or scheduled exports.
 - [ ] **Accounts:** ask every team member to change their temporary password (via "forgot password" or the Firebase console).

@@ -5,9 +5,12 @@ import { useRegistrations, useRunner, useTours } from '@/lib/hooks';
 import { cancelRegistration, deleteRegistration, logRegistrationsExport, setFlag, setStatus } from '@/lib/actions';
 import { can } from '@/lib/roles';
 import { nationalityLabel } from '@/lib/nationalities';
+import { formatPhone } from '@/lib/phone';
+import { MAIL_LABEL, MAIL_STYLE, useMailStatuses, type MailStatus } from '@/lib/mail-status';
 import { buildTrips, countMismatches, groupByTrip, tripCounts, type Trip, type TripCounts } from '@/lib/trips';
 import { exportTrips, tripFileName, type TripSheet } from '@/lib/excel';
-import { STATUS_LABEL, type Admin, type Registration, type Status } from '@/lib/types';
+import { ID_TYPE_LABEL, STATUS_LABEL, type Admin, type Registration, type Status } from '@/lib/types';
+import { TourNoticesInline } from '@/components/TourNotices';
 import {
   ErrorNote, SlotMark, StatusBadge, SuccessNote, formatTourDate, orDash,
 } from '@/components/ui';
@@ -69,9 +72,9 @@ function Counts({ counts, mismatch }: {
   );
 }
 
-function Row({ reg: r, admin, run, busy, onDelete }: {
+function Row({ reg: r, admin, run, busy, onDelete, mail }: {
   reg: Registration; admin: Admin; run: ReturnType<typeof useRunner>['run'];
-  busy: string | null; onDelete: (r: Registration) => void;
+  busy: string | null; onDelete: (r: Registration) => void; mail?: MailStatus;
 }) {
   return (
     <tr className={`border-b border-ink/5 last:border-0 ${r.flag ? 'bg-clay/[0.07] shadow-[inset_4px_0_0_#B4412F]' : ''}`}>
@@ -79,12 +82,29 @@ function Row({ reg: r, admin, run, busy, onDelete }: {
       <td className="cell">
         <div className="font-medium">{r.name}</div>
         <div className="text-xs text-ink/70">
-          <a className="underline" href={`tel:${r.phone}`}>{r.phone}</a>
-          {r.email && <> · {r.email}</>}
+          <a className="underline" href={`tel:${r.phone}`}>{formatPhone(r.phone) || r.phone}</a>
         </div>
+        {r.email && (
+          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-ink/70">
+            <span>{r.email}</span>
+            {mail && (
+              <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${MAIL_STYLE[mail.state]}`}
+                title={mail.error ?? undefined}>
+                {MAIL_LABEL[mail.state]}
+              </span>
+            )}
+          </div>
+        )}
         {r.flag && <div className="mt-1 text-xs font-medium text-clay">Crowd team: {r.flag}</div>}
       </td>
-      <td className="cell font-mono text-xs">{orDash(r.passportNumber)}</td>
+      <td className="cell">
+        <div className="font-mono text-xs">{orDash(r.idNumber)}</div>
+        {r.idType && (
+          <div className="mt-0.5 inline-block rounded bg-ink/10 px-1.5 py-0.5 text-[11px] font-medium text-ink/75">
+            {ID_TYPE_LABEL[r.idType]}
+          </div>
+        )}
+      </td>
       <td className="cell whitespace-nowrap">{r.nationality ? nationalityLabel(r.nationality) : '—'}</td>
       <td className="cell whitespace-nowrap">
         {r.tourDate ? formatTourDate(r.tourDate) : '—'}
@@ -122,12 +142,13 @@ function Row({ reg: r, admin, run, busy, onDelete }: {
   );
 }
 
-function Section({ trip, counts, mismatch, rows, admin, run, busy, open, onToggle, onExport, onDelete }: {
+function Section({ trip, counts, mismatch, rows, admin, run, busy, open, onToggle, onExport, onDelete, mailStatuses }: {
   trip: Trip; counts: TripCounts; mismatch?: { counted: number; stored: number };
   rows: Registration[]; admin: Admin;
   run: ReturnType<typeof useRunner>['run']; busy: string | null;
   open: boolean; onToggle: () => void;
   onExport: () => void; onDelete: (r: Registration) => void;
+  mailStatuses: Map<string, MailStatus>;
 }) {
   const panelId = `trip-${slug(trip.key)}`;
   const exportKey = `export:${trip.key}`;
@@ -157,6 +178,12 @@ function Section({ trip, counts, mismatch, rows, admin, run, busy, open, onToggl
         </div>
       </div>
 
+      {trip.tour && (
+        <div className="px-3 pt-3 sm:px-4">
+          <TourNoticesInline tour={trip.tour} />
+        </div>
+      )}
+
       {open && (
         <div id={panelId} className="overflow-x-auto">
           {rows.length === 0 ? (
@@ -164,13 +191,14 @@ function Section({ trip, counts, mismatch, rows, admin, run, busy, open, onToggl
           ) : (
             <table className="w-full min-w-[980px] text-sm">
               <thead className="table-head"><tr>
-                <th className="cell">Code</th><th className="cell">Visitor</th><th className="cell">Passport</th>
+                <th className="cell">Code</th><th className="cell">Visitor</th><th className="cell">ID / Passport</th>
                 <th className="cell">Nationality</th><th className="cell">Date</th>
                 <th className="cell">Status</th><th className="cell text-right">Actions</th>
               </tr></thead>
               <tbody>
                 {rows.map((r) => (
-                  <Row key={r.id} reg={r} admin={admin} run={run} busy={busy} onDelete={onDelete} />
+                  <Row key={r.id} reg={r} admin={admin} run={run} busy={busy} onDelete={onDelete}
+                    mail={r.mailId ? mailStatuses.get(r.mailId) : undefined} />
                 ))}
               </tbody>
             </table>
@@ -186,6 +214,7 @@ export default function RegistrationsPage() {
   const { data: tours } = useTours();
   const { data: regs, loading, error } = useRegistrations();
   const { run, busy, error: actionError, clearError } = useRunner();
+  const mailStatuses = useMailStatuses();
   const [tourId, setTourId] = useState('');
   const [status, setStatusFilter] = useState<Filter>('');
   const [q, setQ] = useState('');
@@ -200,7 +229,7 @@ export default function RegistrationsPage() {
     return regs
       .filter((r) => !tourId || r.tourId === tourId)
       .filter((r) => !status || (status === 'flagged' ? !!r.flag : r.status === status))
-      .filter((r) => !s || [r.id, r.name, r.email, r.phone, r.passportNumber]
+      .filter((r) => !s || [r.id, r.name, r.email, r.phone, r.idNumber]
         .some((v) => (v ?? '').toLowerCase().includes(s)));
   }, [regs, tourId, status, q]);
 
@@ -313,7 +342,7 @@ export default function RegistrationsPage() {
           <Section
             key={trip.key} trip={trip} counts={counts} rows={sectionRows}
             mismatch={mismatches.get(trip.tourId)}
-            admin={admin} run={run} busy={busy}
+            admin={admin} run={run} busy={busy} mailStatuses={mailStatuses}
             open={!collapsed.has(trip.key)}
             onToggle={() => setCollapsed((c) => {
               const next = new Set(c);
@@ -347,7 +376,7 @@ export default function RegistrationsPage() {
         details={deleting ? [
           ['Name', deleting.name],
           ['Code', deleting.id],
-          ['Passport', orDash(deleting.passportNumber)],
+          [deleting.idType ? ID_TYPE_LABEL[deleting.idType] : 'ID', orDash(deleting.idNumber)],
           ['Tour', deleting.tourName],
           ['Date', deleting.tourDate ? formatTourDate(deleting.tourDate) : '—'],
           ['Departure time', orDash(deleting.departureTime)],

@@ -14,7 +14,7 @@ const TOUR = TOUR_IDS.kapsarc;
 
 
 const HEADERS = [
-  'Code', 'Full name', 'Mobile', 'Passport number', 'Nationality', 'Email',
+  'Code', 'Full name', 'Mobile', 'ID type', 'ID number', 'Nationality', 'Email',
   'Tour', 'Date', 'Departure time', 'Pickup point', 'Status', 'Bus', 'Flag', 'Registered at',
 ];
 
@@ -64,8 +64,8 @@ test.describe('Excel export', () => {
     const email = testEmail();
 
     const a = await registerVisitor(page, {
-      name: 'Excel One', tourId: TOUR, date, passport, email,
-      phone: '0501234567', nationality: 'Egyptian',
+      name: 'Excel One', tourId: TOUR, date, idNumber: passport, email,
+      phone: '0501234567', phoneCountry: 'SA', nationality: 'Egyptian',
     });
     const b = await registerVisitor(page, { name: 'Excel Two', tourId: TOUR, date });
 
@@ -102,11 +102,12 @@ test.describe('Excel export', () => {
     expect(rows.map((r) => r.Code)).toEqual(expect.arrayContaining([a, b]));
 
     const one = rows.find((r) => r.Code === a)!;
-    // A leading zero survives, because the cell is text, not a number.
-    expect(one.Mobile).toBe('0501234567');
+    // The number is readable and still text, so no leading zero or "+" is lost.
+    expect(one.Mobile).toBe('+966 50 123 4567');
     expect(typeof one.Mobile).toBe('string');
-    expect(one['Passport number']).toBe(passport);
-    expect(typeof one['Passport number']).toBe('string');
+    expect(one['ID type']).toBe('Passport');
+    expect(one['ID number']).toBe(passport);
+    expect(typeof one['ID number']).toBe('string');
     expect(one.Nationality).toBe('Egyptian');
     expect(one.Email).toBe(email);
     expect(one['Pickup point']).toBe(tour.pickupPoint);
@@ -116,10 +117,10 @@ test.describe('Excel export', () => {
     expect((one.Date as Date).toISOString().slice(0, 10)).toBe(date);
     expect(one['Registered at']).toBeInstanceOf(Date);
 
-    // Phone and passport carry the text number format.
+    // Phone and ID number carry the text number format.
     const dataRow = ws.getRow(3);
-    expect(dataRow.getCell(3).numFmt).toBe('@');
-    expect(dataRow.getCell(4).numFmt).toBe('@');
+    expect(dataRow.getCell(3).numFmt).toBe('@');  // Mobile
+    expect(dataRow.getCell(5).numFmt).toBe('@');  // ID number
   });
 
   test('Export all writes one sheet per trip plus a Summary whose totals match', async ({ page }) => {

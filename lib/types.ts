@@ -15,16 +15,36 @@ export interface Tour {
   order: number;
   /** ISO 3166-1 alpha-2 nationality codes that may NOT join this tour. */
   restrictedNationalities?: string[];
+  /** Free text, e.g. "15–20 minutes from entering the experience venue". */
+  experienceDuration?: string;
+  /** Conditions a visitor must read and accept before booking this tour. */
+  notices?: string[];
 }
+
+/** Saudis give a National ID; everyone else gives a passport number. */
+export type IdType = 'national_id' | 'passport';
+
+export const ID_TYPE_LABEL: Record<IdType, string> = {
+  national_id: 'National ID',
+  passport: 'Passport',
+};
+
+/** Delivery state written back by the Trigger Email extension onto mail/{id}. */
+export type MailState = 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'ERROR' | 'RETRY';
 
 export interface Registration {
   id: string; // = confirmation code, e.g. "K7QM2P"
   name: string;
-  /** Optional — visitors may register without one, and then get no confirmation email. */
+  /** Required — the booking confirmation is sent here. Stored lowercase. */
   email?: string | null;
+  /** E.164, e.g. "+966501234567". Render it with formatPhone(). */
   phone: string;
-  /** Uppercase letters and digits, 5–20 chars. Never shown on a public page. */
-  passportNumber?: string;
+  /** ISO 3166-1 alpha-2 of the dial code the visitor picked. */
+  phoneCountry?: string;
+  /** Which document the visitor gave. Derived on the server from `nationality`. */
+  idType?: IdType;
+  /** National ID digits or an uppercase passport number. Admin-only — never public. */
+  idNumber?: string;
   /** ISO 3166-1 alpha-2 code; render it with nationalityLabel(). */
   nationality?: string;
   tourId: string;
@@ -42,6 +62,10 @@ export interface Registration {
   updatedBy?: string;
   checkedInAt?: { toDate(): Date } | null;
   boardedAt?: { toDate(): Date } | null;
+  /** Set when the visitor accepted a tour's notices. */
+  conditionsAcceptedAt?: { toDate(): Date } | null;
+  /** The mail/{id} doc holding the booking confirmation, so delivery can be shown. */
+  mailId?: string | null;
 }
 
 export interface Admin {

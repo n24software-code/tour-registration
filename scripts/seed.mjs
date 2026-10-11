@@ -29,6 +29,18 @@ const auth = getAuth();
 // /api/register enforces it. Every other tour is open to everyone.
 const SABIC_RESTRICTED = ['IQ', 'YE', 'LB', 'SY'];
 
+// Boulevard City's experience carries conditions a visitor has to read and accept.
+// Keep this in step with scripts/migrate.mjs, which backfills an existing database.
+const BOULEVARD_INFO = {
+  experienceDuration: '15–20 minutes from entering the experience venue',
+  notices: [
+    'Photography is strictly prohibited inside the experience.',
+    'Pregnant women are not allowed to participate.',
+    'Visitors with heart conditions or high blood pressure are not allowed to participate.',
+    'Visitors who have recently undergone surgery are not allowed to participate.',
+  ],
+};
+
 const TOURS = [
   { id: 'kapsarc-black-gold', name: 'KAPSARC & Black Gold Museum', slot: 'morning', departureTime: '08:00' },
   { id: 'sabic-home-of-innovation', name: 'SABIC - Home of Innovation', slot: 'morning', departureTime: '08:30',
@@ -36,16 +48,22 @@ const TOURS = [
   { id: 'aramco-kafd', name: 'Saudi Aramco - KAFD', slot: 'morning', departureTime: '09:00' },
   { id: 'diriyah-heritage-trail', name: 'Heritage Trail - Diriyah', slot: 'evening', departureTime: '16:30' },
   { id: 'downtown-national-history', name: 'Downtown & National History', slot: 'evening', departureTime: '17:00' },
+  { id: 'boulevard-city', name: 'Boulevard City', slot: 'evening', departureTime: '16:00', ...BOULEVARD_INFO },
 ];
 
+/** A tour already added through the admin UI has a different id but the same name. */
+async function tourExists(id, name) {
+  if ((await db.collection('tours').doc(id).get()).exists) return true;
+  return !(await db.collection('tours').where('name', '==', name).limit(1).get()).empty;
+}
+
 for (const [i, t] of TOURS.entries()) {
-  const { id, restrictedNationalities = [], ...data } = t;
-  const ref = db.collection('tours').doc(id);
-  if ((await ref.get()).exists) { console.log(`skip   ${t.name} (already exists)`); continue; }
-  await ref.set({
+  const { id, restrictedNationalities = [], experienceDuration = '', notices = [], ...data } = t;
+  if (await tourExists(id, t.name)) { console.log(`skip   ${t.name} (already exists)`); continue; }
+  await db.collection('tours').doc(id).set({
     ...data, pickupPoint: 'Main pickup area', date: '',
     capacity: 50, registeredCount: 0, active: true, order: i + 1,
-    restrictedNationalities,
+    restrictedNationalities, experienceDuration, notices,
   });
   console.log(`added  ${t.name}`);
 }

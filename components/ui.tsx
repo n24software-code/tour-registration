@@ -1,5 +1,9 @@
 import type { Slot, Status } from '@/lib/types';
 import { SLOT_NAME, STATUS_LABEL } from '@/lib/types';
+import { formatDate, formatTourDate, orDash } from '@/lib/format';
+
+// Re-exported so components keep importing their formatting from one place.
+export { formatDate, formatTourDate, orDash };
 
 const STATUS_STYLE: Record<Status, string> = {
   pending: 'bg-ink/10 text-ink',
@@ -58,18 +62,6 @@ export function SuccessNote({ message, onClose }: { message: string; onClose?: (
 export function seatsLeft(t: { capacity: number; registeredCount: number }) {
   return Math.max(0, t.capacity - t.registeredCount);
 }
-
-export function formatDate(d?: string) {
-  if (!d) return '';
-  const date = new Date(`${d}T00:00:00`);
-  return isNaN(date.getTime()) ? d : date.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
-}
-
-/** Old registrations have no passport/nationality/date — show a dash rather than nothing. */
-export const orDash = (v?: string | null) => (v && String(v).trim()) || '—';
-
-/** "Sat, 15 Nov 2026" when there is a date, "No fixed date" when there isn't. */
-export const formatTourDate = (d?: string) => (d ? formatDate(d) : 'No fixed date');
 
 /** One line that names a trip: "08:30 · Sat, 15 Nov 2026 · SABIC - Home of Innovation". */
 export const tripLabel = (t: { departureTime: string; date: string; tourName: string }) =>

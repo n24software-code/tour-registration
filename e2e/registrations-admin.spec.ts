@@ -128,7 +128,7 @@ test.describe('Registrations: grouped sections', () => {
     const passport = testPassport();
     const date = dayAfter(54);
     const code = await registerVisitor(page, {
-      name: 'Full Record', tourId: TOUR, passport, nationality: 'Indian', date,
+      name: 'Full Record', tourId: TOUR, idNumber: passport, nationality: 'Indian', date,
     });
 
     // A registration written before these fields existed must not break the page.
@@ -163,7 +163,7 @@ test.describe('Registrations: grouped sections', () => {
     const date = dayAfter(55);
     const tour = await getTour(TOUR);
     const here = await registerVisitor(page, {
-      name: 'Crowd Trip Subject', tourId: TOUR, passport, date,
+      name: 'Crowd Trip Subject', tourId: TOUR, nationality: 'Egyptian', idNumber: passport, date,
     });
     const elsewhere = await registerVisitor(page, {
       name: 'Crowd Other Day', tourId: TOUR, date: dayAfter(56),
@@ -203,7 +203,7 @@ test.describe('Registrations: delete', () => {
     const passport = testPassport();
     const date = dayAfter(57);
     const code = await registerVisitor(page, {
-      name: 'Delete Me', tourId: TOUR, passport, date,
+      name: 'Delete Me', tourId: TOUR, nationality: 'Egyptian', idNumber: passport, date,
     });
     const before = (await getTour(TOUR)).registeredCount;
 

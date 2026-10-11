@@ -87,9 +87,10 @@ test.describe('Registration <-> Crowd in real time', () => {
 
     await expect(card).toContainText('On the bus');
     await expect(card).toContainText('Bus 3');
-    const after = await getReg(code);
-    expect(after?.status).toBe('boarded');
-    expect(after?.busNumber).toBe('3');
+    // The card updates from Firestore's local echo before the server acknowledges the
+    // write, so the stored values have to be polled rather than read once.
+    await expect.poll(async () => (await getReg(code))?.status, { timeout: 20_000 }).toBe('boarded');
+    expect((await getReg(code))?.busNumber).toBe('3');
     await waitForAudit(code, 'status:boarded');
 
     // A boarded visitor has no Cancel button on the Registration page.
@@ -253,7 +254,7 @@ test.describe('Registration <-> Crowd in real time', () => {
   test('Export all honours the search filter, and the section file names its trip', async ({ browser, page }) => {
     const passport = testPassport();
     const code = await registerVisitor(page, {
-      name: 'Export Filtered', email: testEmail(), tourId: TOUR, passport,
+      name: 'Export Filtered', email: testEmail(), tourId: TOUR, idNumber: passport,
       nationality: 'Egyptian', date: DATE,
     });
 
@@ -279,8 +280,9 @@ test.describe('Registration <-> Crowd in real time', () => {
     const values = (ws.getRow(3).values as unknown[]).slice(1);
     expect(ws.rowCount).toBe(3); // title + header + the one row
     expect(values[0]).toBe(code);
-    expect(values[3]).toBe(passport);
-    expect(values[4]).toBe('Egyptian');
+    expect(values[3]).toBe('Passport');   // ID type
+    expect(values[4]).toBe(passport);     // ID number
+    expect(values[5]).toBe('Egyptian');
 
     // The section's own button names the trip it came from.
     const [sectionFile] = await Promise.all([

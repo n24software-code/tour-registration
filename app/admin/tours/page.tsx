@@ -11,10 +11,13 @@ const fieldsOf = (t: Tour): TourFields => ({
   name: t.name, slot: t.slot, pickupPoint: t.pickupPoint, departureTime: t.departureTime,
   date: t.date ?? '', capacity: t.capacity, active: t.active,
   restrictedNationalities: t.restrictedNationalities ?? [],
+  experienceDuration: t.experienceDuration ?? '',
+  notices: t.notices ?? [],
 });
 const blank: TourFields = {
   name: '', slot: 'morning', pickupPoint: 'Main pickup area', departureTime: '08:00',
   date: '', capacity: 50, active: true, restrictedNationalities: [],
+  experienceDuration: '', notices: [],
 };
 
 const picked = (el: HTMLSelectElement) => Array.from(el.selectedOptions, (o) => o.value);
@@ -51,6 +54,57 @@ function RestrictedPicker({ id, label, value, onChange }: {
         </button>
       )}
     </>
+  );
+}
+
+/**
+ * Trip information shown to visitors before they book: how long the experience takes,
+ * and any conditions they have to confirm. A tour with notices makes the consent
+ * checkbox on the public form required.
+ */
+function TripInfoEditor({ idFor, label, duration, notices, onChange }: {
+  idFor: (f: string) => string;
+  label: string;
+  duration: string;
+  notices: string[];
+  onChange: (patch: { experienceDuration?: string; notices?: string[] }) => void;
+}) {
+  const setNotice = (i: number, value: string) =>
+    onChange({ notices: notices.map((n, j) => (j === i ? value : n)) });
+  return (
+    <div className="min-w-[18rem] space-y-2">
+      <label htmlFor={idFor('duration')} className="sr-only">Experience duration for {label}</label>
+      <input
+        id={idFor('duration')} className="input" placeholder="Experience duration (optional)"
+        value={duration} onChange={(e) => onChange({ experienceDuration: e.target.value })}
+      />
+      <ul className="space-y-1.5">
+        {notices.map((n, i) => (
+          <li key={i} className="flex gap-1.5">
+            <label htmlFor={idFor(`notice-${i}`)} className="sr-only">
+              Notice {i + 1} for {label}
+            </label>
+            <input
+              id={idFor(`notice-${i}`)} className="input" value={n}
+              onChange={(e) => setNotice(i, e.target.value)}
+            />
+            <button
+              type="button" className="btn-ghost btn-sm shrink-0"
+              aria-label={`Remove notice ${i + 1} for ${label}`}
+              onClick={() => onChange({ notices: notices.filter((_, j) => j !== i) })}
+            >
+              Remove
+            </button>
+          </li>
+        ))}
+      </ul>
+      <button type="button" className="btn-ghost btn-sm" onClick={() => onChange({ notices: [...notices, ''] })}>
+        Add notice
+      </button>
+      {notices.length > 0 && (
+        <p className="text-xs text-ink/70">Visitors must tick a box to confirm these before booking.</p>
+      )}
+    </div>
   );
 }
 
@@ -105,6 +159,13 @@ function TourRow({ tour, admin, run, busy }: {
         />
       </td>
       <td className="cell">
+        <TripInfoEditor
+          idFor={id} label={tour.name}
+          duration={t.experienceDuration} notices={t.notices}
+          onChange={(patch) => setT({ ...t, ...patch })}
+        />
+      </td>
+      <td className="cell">
         <label className="flex min-h-[44px] items-center gap-2 whitespace-nowrap">
           <input type="checkbox" className="h-4 w-4 accent-palm" checked={t.active} onChange={(e) => setT({ ...t, active: e.target.checked })} />
           {t.active ? 'Open' : 'Closed'}
@@ -147,17 +208,19 @@ export default function ToursPage() {
       <h1 className="text-2xl font-semibold">Tours</h1>
       <p className="mt-1 text-sm text-ink/70">
         Edit a row and press Save. Closing a tour hides it from new registrations but keeps everyone already registered.
-        Restricted nationalities are refused by the server as well as the form.
+        Restricted nationalities are refused by the server as well as the form, and a tour with notices makes
+        visitors confirm them before they can book.
       </p>
       <ErrorNote message={error} />
       <ErrorNote message={actionError} onClose={clearError} />
 
       <div className="mt-6 overflow-x-auto rounded-md border border-ink/10 bg-white">
-        <table className="w-full min-w-[1140px] text-sm">
+        <table className="w-full min-w-[1500px] text-sm">
           <thead className="table-head"><tr>
             <th className="cell">Tour</th><th className="cell">Pickup point</th><th className="cell">Date</th>
             <th className="cell">Departs</th><th className="cell">Capacity</th>
             <th className="cell">Restricted nationalities</th>
+            <th className="cell">Trip information</th>
             <th className="cell">Registration</th>
             <th className="cell"><span className="sr-only">Actions</span></th>
           </tr></thead>
@@ -211,6 +274,14 @@ export default function ToursPage() {
                 ? `Blocked: ${form.restrictedNationalities.map(nationalityLabel).join(', ')}`
                 : 'Leave empty to welcome every nationality.'}
             </p>
+          </div>
+          <div className="sm:col-span-2">
+            <span className="label block">Trip information</span>
+            <TripInfoEditor
+              idFor={(f) => `new-${f}`} label="the new tour"
+              duration={form.experienceDuration} notices={form.notices}
+              onChange={(patch) => setForm({ ...form, ...patch })}
+            />
           </div>
           <div className="flex items-end sm:col-span-2">
             <button className="btn-primary w-full" disabled={busy === 'new'}>Add tour</button>

@@ -1,8 +1,10 @@
 import { expect, test } from '@playwright/test';
 import {
-  TOUR_IDS, adminDb, dayAfter, expectLogos, fillRegistrationForm, getReg, getTour,
+  TOUR_IDS, adminDb, dayAfter, expectLogos, fillRegistrationForm, getReg, getTour, mailsTo,
   nationalityBox, patchTour, registerVisitor, registrationBody, testEmail, testPassport,
 } from './helpers';
+import { EMAIL_ERROR } from '@/lib/validation';
+import { PHONE_ERROR } from '@/lib/phone';
 
 /** Mirrors formatDate() in components/ui.tsx. */
 const longDate = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB', {
@@ -47,19 +49,19 @@ test.describe('Public registration', () => {
     await page.getByRole('button', { name: /Register for this tour/ }).click();
 
     await expect(page.getByText('Enter your full name (at least 2 characters).')).toBeVisible();
-    await expect(page.getByText(/Enter a phone number with 8.15 digits/)).toBeVisible();
-    await expect(page.getByText(PASSPORT_ERROR)).toBeVisible();
+    await expect(page.getByText(PHONE_ERROR)).toBeVisible();
     await expect(page.getByText('Choose your nationality.')).toBeVisible();
     await expect(page.getByText('Choose a tour above.')).toBeVisible();
     await expect(page.getByText('Choose the date of your tour.')).toBeVisible();
 
-    // Email is the one optional field, so it must NOT complain when left empty.
-    await expect(page.getByText('Enter a valid email address, like name@example.com.')).toHaveCount(0);
+    // Email is required now, and the ID field waits for a nationality.
+    await expect(page.getByText(EMAIL_ERROR)).toBeVisible();
+    await expect(page.getByText('Choose your nationality first.')).toBeVisible();
   });
 
   test('a malformed passport is rejected on the client and on the server', async ({ page }) => {
     await fillRegistrationForm(page, {
-      name: 'Bad Passport', tourId: TOUR_IDS.kapsarc, passport: 'AB-12!',
+      name: 'Bad Passport', tourId: TOUR_IDS.kapsarc, nationality: 'Egyptian', idNumber: 'AB-12!',
     });
     await page.getByRole('button', { name: /Register for this tour/ }).click();
     await expect(page.getByText(PASSPORT_ERROR)).toBeVisible();
@@ -67,10 +69,10 @@ test.describe('Public registration', () => {
 
     for (const passport of ['AB-12!', 'AB12', 'A'.repeat(21)]) {
       const res = await page.request.post('/api/register', {
-        data: registrationBody({ passportNumber: passport, tourId: TOUR_IDS.kapsarc }),
+        data: registrationBody({ nationality: 'EG', idNumber: passport, tourId: TOUR_IDS.kapsarc }),
       });
       expect(res.status(), `passport "${passport}"`).toBe(400);
-      expect((await res.json()).errors.passportNumber).toBe(PASSPORT_ERROR);
+      expect((await res.json()).errors.idNumber).toBe(PASSPORT_ERROR);
     }
   });
 
@@ -115,7 +117,7 @@ test.describe('Public registration', () => {
   test('nationality must come from the list, and is stored as an ISO code', async ({ page }) => {
     const passport = testPassport();
     const code = await registerVisitor(page, {
-      name: 'Nationality Visitor', tourId: TOUR_IDS.kapsarc, passport, nationality: 'Egyptian',
+      name: 'Nationality Visitor', tourId: TOUR_IDS.kapsarc, idNumber: passport, nationality: 'Egyptian',
     });
     expect((await getReg(code))?.nationality).toBe('EG');
 
@@ -127,35 +129,91 @@ test.describe('Public registration', () => {
     expect((await res.json()).errors.nationality).toBe('Choose a nationality from the list.');
   });
 
-  for (const [label, phone] of [
-    ['Saudi local', '050 123 4567'],
-    ['Saudi international', '+966 50 123 4567'],
-    ['international', '+44 20 7946 0958'],
+  for (const [label, country, phone, stored] of [
+    ['Saudi local', 'SA', '050 123 4567', '+966501234567'],
+    ['Saudi with the code typed in', 'SA', '+966 50 123 4567', '+966501234567'],
+    ['British', 'GB', '020 7946 0958', '+442079460958'],
   ] as const) {
     test(`accepts a ${label} mobile number`, async ({ page }) => {
       const email = testEmail();
       const code = await registerVisitor(page, {
-        name: `Phone ${label}`, email, phone, tourId: TOUR_IDS.sabic, nationality: 'Saudi',
+        name: `Phone ${label}`, email, phone, phoneCountry: country,
+        tourId: TOUR_IDS.sabic, nationality: 'Saudi',
       });
       expect(code).toMatch(/^[A-Z2-9]{6}$/);
       const reg = await getReg(code);
-      // Stored normalised: leading + kept, separators stripped.
+      // However it was typed, it is stored in E.164 alongside its country.
       expect(reg?.email).toBe(email);
-      expect(reg?.phone).toBe(phone.replace(/(?!^\+)[^\d]/g, ''));
+      expect(reg?.phone).toBe(stored);
+      expect(reg?.phoneCountry).toBe(country);
     });
   }
 
-  test('email is optional: no address, no problem, and no mail document', async ({ page }) => {
-    const mailBefore = (await adminDb().collection('mail').count().get()).data().count;
-    const code = await registerVisitor(page, { name: 'No Email Visitor', tourId: TOUR_IDS.kapsarc });
+  test('email is required on the client and the server, and is stored lowercase', async ({ page }) => {
+    // Client: leaving it empty blocks the submit.
+    await fillRegistrationForm(page, { name: 'No Email Visitor', tourId: TOUR_IDS.kapsarc, email: ' ' });
+    await page.getByLabel('Email', { exact: true }).fill('');
+    await page.getByRole('button', { name: /Register for this tour/ }).click();
+    await expect(page.getByText(EMAIL_ERROR)).toBeVisible();
+    await expect(page).not.toHaveURL(/\/registered\//);
 
-    const reg = await getReg(code);
-    expect(reg?.email ?? null).toBeNull();
-    expect(reg?.status).toBe('pending');
-    expect((await adminDb().collection('mail').count().get()).data().count).toBe(mailBefore);
+    // Server: the same, for anything that bypasses the form.
+    const res = await page.request.post('/api/register', { data: registrationBody({ email: '' }) });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).errors.email).toBe(EMAIL_ERROR);
+
+    // A mixed-case address is stored lowercase.
+    const mixed = testEmail().toUpperCase();
+    const ok = await page.request.post('/api/register', { data: registrationBody({ email: mixed }) });
+    expect(ok.status()).toBe(201);
+    expect((await getReg((await ok.json()).code))?.email).toBe(mixed.toLowerCase());
   });
 
-  test('an email that IS filled in still has to look like an email', async ({ page }) => {
+  test('every successful registration queues exactly one booking confirmation', async ({ page }) => {
+    const email = testEmail();
+    const tour = await getTour(TOUR_IDS.kapsarc);
+    await patchTour(TOUR_IDS.kapsarc, { date: '' });
+    const date = dayAfter(2);
+    const code = await registerVisitor(page, {
+      name: 'Mail Visitor', tourId: TOUR_IDS.kapsarc, email, date,
+    });
+
+    const mails = await mailsTo(email);
+    expect(mails, 'exactly one mail document per registration').toHaveLength(1);
+    const mail = mails[0];
+    expect((await getReg(code))?.mailId).toBe(mail.id);
+    expect(mail.to).toBe(email);
+    expect(mail.message.subject).toBe(`Booking confirmed – ${tour.name} – ${code}`);
+
+    // The HTML escapes every value that came from data — this tour's name has an "&".
+    const escaped = (v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    expect(tour.name).toContain('&');
+    expect(mail.message.html).not.toContain(tour.name);
+    expect(mail.message.html).toContain(escaped(tour.name));
+
+    expect(mail.message.text).toContain(tour.name);
+    for (const body of [mail.message.text, mail.message.html]) {
+      expect(body).toContain(code);
+      expect(body).toContain(tour.pickupPoint);
+      expect(body).toContain(tour.departureTime);
+      expect(body).toContain(longDate(date));   // the readable date, not the ISO string
+      expect(body).toContain('Arrive 15 minutes before departure');
+    }
+    expect(mail.message.html).toContain(`/registered/${code}`);
+
+    // A script tag in a visitor's name must never survive into the markup.
+    const nasty = await page.request.post('/api/register', {
+      data: registrationBody({
+        name: '<script>alert(1)</script> Nasty', tourId: TOUR_IDS.kapsarc, tourDate: dayAfter(3),
+      }),
+    });
+    expect(nasty.status()).toBe(201);
+    const nastyMail = (await mailsTo((await getReg((await nasty.json()).code))!.email!))[0];
+    expect(nastyMail.message.html).not.toContain('<script>');
+    expect(nastyMail.message.html).toContain('&lt;script&gt;');
+  });
+
+  test('a malformed email is rejected', async ({ page }) => {
     await fillRegistrationForm(page, {
       name: 'Bad Email', tourId: TOUR_IDS.kapsarc, email: 'not-an-email',
     });
@@ -171,7 +229,8 @@ test.describe('Public registration', () => {
     const date = dayAfter(3);
     await patchTour(TOUR_IDS.kapsarc, { date: '' });
     const code = await registerVisitor(page, {
-      name: 'Layla Al Qahtani', email: testEmail(), tourId: TOUR_IDS.kapsarc, passport, date,
+      name: 'Layla Al Qahtani', email: testEmail(), tourId: TOUR_IDS.kapsarc,
+      nationality: 'Egyptian', idNumber: passport, date,
     });
     const tour = await getTour(TOUR_IDS.kapsarc);
 
@@ -197,32 +256,33 @@ test.describe('Public registration', () => {
     expect((await getReg(code))?.departureTime).toBe(tour.departureTime);
   });
 
-  test('one passport per tour per date: same day rejected, another day fine, cancelling frees it', async ({ page }) => {
+  test('one ID per tour per date: same day rejected, another day fine, cancelling frees it', async ({ page }) => {
     await patchTour(TOUR_IDS.aramco, { date: '' });
     const passport = testPassport();
     const date = dayAfter(2);
 
     const first = await registerVisitor(page, {
-      name: 'Repeat Visitor', tourId: TOUR_IDS.aramco, passport, date,
+      name: 'Repeat Visitor', tourId: TOUR_IDS.aramco, nationality: 'Egyptian', idNumber: passport, date,
     });
 
     // Same passport, same tour, same date -> rejected.
     const dup = await page.request.post('/api/register', {
-      data: registrationBody({ passportNumber: passport, tourId: TOUR_IDS.aramco, tourDate: date }),
+      data: registrationBody({ nationality: 'EG', idNumber: passport, tourId: TOUR_IDS.aramco, tourDate: date }),
     });
     expect(dup.status()).toBe(409);
     expect((await dup.json()).message).toBe('This passport is already registered for this tour on this date.');
+    expect((await dup.json()).errors?.idNumber ?? '').toContain('already registered');
 
     // Same passport, same tour, a DIFFERENT date -> accepted.
     const otherDay = await page.request.post('/api/register', {
-      data: registrationBody({ passportNumber: passport, tourId: TOUR_IDS.aramco, tourDate: dayAfter(3) }),
+      data: registrationBody({ nationality: 'EG', idNumber: passport, tourId: TOUR_IDS.aramco, tourDate: dayAfter(3) }),
     });
     expect(otherDay.status()).toBe(201);
 
     // After cancelling the first one, that same day is free again.
     await adminDb().collection('registrations').doc(first).update({ status: 'cancelled' });
     const again = await page.request.post('/api/register', {
-      data: registrationBody({ passportNumber: passport, tourId: TOUR_IDS.aramco, tourDate: date }),
+      data: registrationBody({ nationality: 'EG', idNumber: passport, tourId: TOUR_IDS.aramco, tourDate: date }),
     });
     expect(again.status()).toBe(201);
     const secondCode = (await again.json()).code as string;
@@ -278,6 +338,6 @@ test.describe('Public registration', () => {
     await expect(page.getByRole('option')).toHaveText('Egyptian');
 
     await input.fill('zzzz');
-    await expect(page.getByText('No nationality matches that.')).toBeVisible();
+    await expect(page.getByText('Nothing matches that.')).toBeVisible();
   });
 });

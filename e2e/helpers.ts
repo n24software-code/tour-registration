@@ -19,17 +19,36 @@ export const testEmail = () =>
 export const isTestEmail = (e: string) =>
   e.startsWith(TEST_EMAIL_PREFIX) && e.endsWith(TEST_EMAIL_DOMAIN);
 
-/**
- * Email is optional now, so teardown can no longer rely on it alone. Every passport the
- * suite invents starts with E2E, which real passports never do.
- */
+/** Every passport the suite invents starts with E2E, which real passports never do. */
 export const TEST_PASSPORT_PREFIX = 'E2E';
 export const testPassport = () =>
   `${TEST_PASSPORT_PREFIX}${String(Date.now()).slice(-8)}${randomInt(100, 999)}`;
 export const isTestPassport = (p: string) => p.startsWith(TEST_PASSPORT_PREFIX);
+
+/**
+ * A National ID has a check digit, so it can't carry a marker the way a passport can.
+ * Saudi test registrations are recognised by their e2e email instead, which is now a
+ * required field on every registration.
+ */
+export function nationalIdCheckDigit(firstNine: string) {
+  let total = 0;
+  for (let i = 0; i < 9; i++) {
+    const d = Number(firstNine[i]);
+    if (i % 2 === 0) { const x = d * 2; total += x > 9 ? x - 9 : x; } else total += d;
+  }
+  return (10 - (total % 10)) % 10;
+}
+/** A fresh, genuinely valid National ID. */
+export function testNationalId() {
+  const stem = `1${String(randomInt(0, 99999999)).padStart(8, '0')}`;
+  return `${stem}${nationalIdCheckDigit(stem)}`;
+}
+
 /** True for anything this suite created, however it was created. */
-export const isTestReg = (d: { email?: unknown; passportNumber?: unknown }) =>
-  isTestEmail(String(d.email ?? '')) || isTestPassport(String(d.passportNumber ?? ''));
+export const isTestReg = (d: { email?: unknown; idNumber?: unknown; passportNumber?: unknown }) =>
+  isTestEmail(String(d.email ?? ''))
+  || isTestPassport(String(d.idNumber ?? ''))
+  || isTestPassport(String(d.passportNumber ?? ''));
 
 /** "YYYY-MM-DD" in Riyadh, the same clock lib/validation.ts uses. */
 export const today = () => new Intl.DateTimeFormat('en-CA', {
@@ -130,23 +149,45 @@ export async function signOut(page: Page) {
 export interface VisitorOpts {
   name: string;
   tourId: string;
-  /** Optional now — leave it out to prove the field really is optional. */
+  /** Required on the form; defaults to a fresh e2e address. */
   email?: string;
+  /** National part only, e.g. "0501234567". */
   phone?: string;
-  passport?: string;
+  /** ISO2 of the dial code to pick. Left alone to test the nationality default. */
+  phoneCountry?: string;
+  /** National ID or passport — defaults to whatever the nationality calls for. */
+  idNumber?: string;
   /** Demonym, not the code, because that is what the combobox shows. */
   nationality?: string;
   /** Ignored when the tour has a fixed date — the form fills that in itself. */
   date?: string;
+  /** Leave false to prove the consent checkbox is enforced. */
+  acceptConditions?: boolean;
 }
+
+// ---------------------------------------------------------------- form fields
+
+/** The country-code combobox next to the mobile number. */
+export const countryBox = (page: Page) => page.getByRole('combobox', { name: 'Country code' });
+
+/** Picks a dial code by ISO2, e.g. "GB". */
+export async function chooseCountryCode(page: Page, iso2: string) {
+  const input = countryBox(page);
+  await input.click();
+  await input.fill('');
+  await page.locator(`[role="option"][data-value="${iso2}"]`).first().click();
+}
+
+/** The identity field, whose label follows the nationality. */
+export const idBox = (page: Page) => page.locator('#idNumber');
 
 // ---------------------------------------------------------------- logos
 
-/** Left to right, exactly as the partners agreed. */
+/** Left to right, exactly as components/Logos.tsx renders them. */
 export const LOGO_ALTS = [
-  'Ministry of Energy',
-  '25th WPC Energy Congress, 11–15 October 2026',
   'WPC Energy',
+  '25th WPC Energy Congress, 11–15 October 2026',
+  'Ministry of Energy',
 ] as const;
 
 /** Checks all three logos are present, in order, the same height, and on screen. */
@@ -203,9 +244,18 @@ export async function registerVisitor(page: Page, opts: VisitorOpts) {
 export async function fillRegistrationForm(page: Page, opts: VisitorOpts) {
   await page.goto('/');
   await page.getByLabel('Full name').fill(opts.name);
+
+  // Nationality first: it decides whether the ID field wants an ID or a passport, and
+  // suggests the dial code.
+  const nationality = opts.nationality ?? 'Saudi';
+  await chooseNationality(page, nationality);
+  // Pin the dial code explicitly: the nationality would otherwise move it, and the
+  // default number below is a Saudi one. (phone.spec.ts covers the suggestion itself.)
+  await chooseCountryCode(page, opts.phoneCountry ?? 'SA');
   await page.getByLabel('Mobile number').fill(opts.phone ?? '0501234567');
-  await page.getByLabel('Passport number').fill(opts.passport ?? testPassport());
-  await chooseNationality(page, opts.nationality ?? 'Saudi');
+
+  const isSaudi = nationality === 'Saudi';
+  await idBox(page).fill(opts.idNumber ?? (isSaudi ? testNationalId() : testPassport()));
 
   // The radio itself is .sr-only, so click the label that wraps it, as a user would.
   const radio = page.locator(`input[name="tour"][value="${opts.tourId}"]`);
@@ -216,14 +266,21 @@ export async function fillRegistrationForm(page: Page, opts: VisitorOpts) {
   if (!(await date.evaluate((el: HTMLInputElement) => el.readOnly))) {
     await date.fill(opts.date ?? dayAfter(1));
   }
-  if (opts.email) await page.getByLabel(/^Email/).fill(opts.email);
+  await page.getByLabel('Email', { exact: true }).fill(opts.email ?? testEmail());
+
+  // Only tours that carry notices show the checkbox.
+  const consent = page.locator('#acceptedConditions');
+  if (opts.acceptConditions !== false && await consent.count()) await consent.check();
 }
 
 /** The JSON body /api/register expects, with sensible defaults. */
-export function registrationBody(over: Partial<Record<string, string>> = {}) {
+export function registrationBody(over: Record<string, unknown> = {}) {
   return {
-    name: 'Api Visitor', phone: '0501234567', passportNumber: testPassport(),
-    nationality: 'SA', tourId: TOUR_IDS.aramco, tourDate: dayAfter(1), ...over,
+    name: 'Api Visitor', phone: '0501234567', phoneCountry: 'SA',
+    idNumber: testNationalId(), nationality: 'SA',
+    tourId: TOUR_IDS.aramco, tourDate: dayAfter(1),
+    email: testEmail(), acceptedConditions: true,
+    ...over,
   };
 }
 
@@ -237,12 +294,33 @@ export const TOUR_IDS = {
   downtown: 'downtown-national-history',
 } as const;
 
+/**
+ * Boulevard City was created through the admin UI, so its document id is generated
+ * rather than a slug. It is looked up by name once per run.
+ */
+let boulevardId: string | undefined;
+export async function boulevardTourId() {
+  if (boulevardId) return boulevardId;
+  const snap = await adminDb().collection('tours').where('name', '==', 'Boulevard City').limit(1).get();
+  if (snap.empty) throw new Error('No "Boulevard City" tour. Run `npm run migrate`.');
+  boulevardId = snap.docs[0].id;
+  return boulevardId;
+}
+
+export const BOULEVARD_DURATION = '15–20 minutes from entering the experience venue';
+export const BOULEVARD_NOTICES = [
+  'Photography is strictly prohibited inside the experience.',
+  'Pregnant women are not allowed to participate.',
+  'Visitors with heart conditions or high blood pressure are not allowed to participate.',
+  'Visitors who have recently undergone surgery are not allowed to participate.',
+];
+
 export async function getTour(tourId: string) {
   const snap = await adminDb().collection('tours').doc(tourId).get();
   return snap.data() as {
     name: string; slot: string; pickupPoint: string; departureTime: string;
     date?: string; capacity: number; registeredCount: number; active: boolean; order: number;
-    restrictedNationalities?: string[];
+    restrictedNationalities?: string[]; experienceDuration?: string; notices?: string[];
   };
 }
 
@@ -259,10 +337,36 @@ export const getReg = async (code: string) =>
   (await adminDb().collection('registrations').doc(code).get()).data() as
     | {
         status: string; busNumber?: string | null; flag?: string | null;
-        email?: string | null; name: string; phone: string;
-        passportNumber?: string; nationality?: string; tourDate?: string; departureTime?: string;
+        email?: string | null; name: string; phone: string; phoneCountry?: string;
+        idType?: 'national_id' | 'passport'; idNumber?: string;
+        nationality?: string; tourDate?: string; departureTime?: string;
+        conditionsAcceptedAt?: unknown; mailId?: string | null;
       }
     | undefined;
+
+// ---------------------------------------------------------------- mail
+
+export interface MailDoc {
+  id: string;
+  to: string;
+  from?: string;
+  message: { subject: string; text: string; html: string };
+}
+
+/** The booking confirmation queued for a registration, via its stored mailId. */
+export async function mailFor(code: string): Promise<MailDoc | undefined> {
+  const reg = await getReg(code);
+  if (!reg?.mailId) return undefined;
+  const snap = await adminDb().collection('mail').doc(reg.mailId).get();
+  if (!snap.exists) return undefined;
+  return { id: snap.id, ...(snap.data() as Omit<MailDoc, 'id'>) };
+}
+
+/** Every mail document addressed to one visitor — used to prove there is exactly one. */
+export async function mailsTo(email: string) {
+  const snap = await adminDb().collection('mail').where('to', '==', email).get();
+  return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<MailDoc, 'id'>) }));
+}
 
 /** Audit entries for one registration, newest first. */
 export async function auditFor(regId: string) {

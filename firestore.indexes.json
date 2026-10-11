@@ -5,7 +5,11 @@
       "queryScope": "COLLECTION",
       "fields": [
         {
-          "fieldPath": "passportNumber",
+          "fieldPath": "idType",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "idNumber",
           "order": "ASCENDING"
         },
         {
